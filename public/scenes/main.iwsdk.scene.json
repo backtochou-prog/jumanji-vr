@@ -1,0 +1,1393 @@
+{
+ "version": "iwsdk.scene.v1",
+ "units": "meters",
+ "components": {
+  "com.iwsdk.components.DomeGradient": {
+   "sky": [
+    0.3,
+    0.55,
+    0.58,
+    1
+   ],
+   "equator": [
+    0.66,
+    0.77,
+    0.7,
+    1
+   ],
+   "ground": [
+    0.12,
+    0.17,
+    0.1,
+    1
+   ],
+   "elevationDeg": 32,
+   "azimuthDeg": 110,
+   "dither": true
+  },
+  "com.iwsdk.components.IBLGradient": {
+   "sky": [
+    0.36,
+    0.52,
+    0.5,
+    1
+   ],
+   "equator": [
+    0.36,
+    0.46,
+    0.36,
+    1
+   ],
+   "ground": [
+    0.1,
+    0.13,
+    0.07,
+    1
+   ],
+   "intensity": 0.72
+  }
+ },
+ "environment": {
+  "toneMapping": "aces",
+  "exposure": 1.05,
+  "shadows": true,
+  "shadowMapType": "pcf",
+  "fog": {
+   "type": "exponential",
+   "color": "#a9c4b3",
+   "density": 0.0125
+  }
+ },
+ "player": {
+  "transform": {
+   "position": [
+    0.6,
+    -0.013,
+    11.5
+   ],
+   "rotationDeg": [
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "resources": {
+  "prefabs": []
+ },
+ "authoring": {
+  "views": [
+   {
+    "id": "hero",
+    "role": "hero",
+    "projection": "perspective",
+    "position": [
+     0.6,
+     1.637,
+     11.5
+    ],
+    "target": [
+     -2.2,
+     3,
+     -8
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-entrance",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     0.2,
+     1.752,
+     5.5
+    ],
+    "target": [
+     0.2,
+     3,
+     -12
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-gate-inside",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     0,
+     1.891,
+     -6
+    ],
+    "target": [
+     -2.2,
+     2.5,
+     -20
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-trail-a",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -3,
+     1.772,
+     -16.5
+    ],
+    "target": [
+     -1.2,
+     1.2,
+     -26
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-pool",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -3.8,
+     1.804,
+     -21
+    ],
+    "target": [
+     -1,
+     0.6,
+     -24.5
+    ],
+    "fov": 74
+   },
+   {
+    "id": "v-ford",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -1,
+     1.832,
+     -21
+    ],
+    "target": [
+     3.5,
+     1.3,
+     -30
+    ],
+    "fov": 74
+   },
+   {
+    "id": "v-rootarch",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     4.6,
+     1.521,
+     -31.2
+    ],
+    "target": [
+     4.4,
+     2,
+     -42
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-trail-end",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -1.2,
+     1.799,
+     -44
+    ],
+    "target": [
+     -0.6,
+     2,
+     -60
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-clearing",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     0,
+     1.641,
+     -55
+    ],
+    "target": [
+     0,
+     3,
+     -70
+    ],
+    "fov": 78
+   },
+   {
+    "id": "v-altar",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -4.2,
+     1.656,
+     -57.5
+    ],
+    "target": [
+     0,
+     1,
+     -61.5
+    ],
+    "fov": 60
+   },
+   {
+    "id": "v-top",
+    "role": "diagnostic",
+    "projection": "orthographic",
+    "position": [
+     0,
+     90,
+     -34
+    ],
+    "target": [
+     0,
+     0,
+     -34
+    ],
+    "height": 130
+   }
+  ]
+ },
+ "nodes": [
+  {
+   "id": "terrain",
+   "name": "Terrain + Trail",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "jungle-terrain",
+    "receiveShadow": true
+   },
+   "components": {
+    "LocomotionEnvironment": {}
+   }
+  },
+  {
+   "id": "world-colliders",
+   "name": "Invisible colliders",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "world-colliders"
+   },
+   "components": {
+    "LocomotionEnvironment": {}
+   }
+  },
+  {
+   "id": "water",
+   "name": "Pool, stream and puddles",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "water"
+   },
+   "components": {
+    "ScrollTexture": {
+     "speedU": 0.01,
+     "speedV": -0.05
+    }
+   }
+  },
+  {
+   "id": "pool-trickle",
+   "name": "Pool cascade",
+   "content": {
+    "type": "asset",
+    "asset": "pool-trickle"
+   },
+   "transform": {
+    "position": [
+     -11.3,
+     2.054,
+     -23.9
+    ]
+   },
+   "components": {
+    "ScrollTexture": {
+     "speedU": 0,
+     "speedV": -0.9
+    }
+   }
+  },
+  {
+   "id": "cliff",
+   "name": "Distant cliff",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "cliff"
+   },
+   "transform": {
+    "position": [
+     5,
+     -2,
+     -96
+    ],
+    "rotationDeg": [
+     0,
+     -8.25,
+     0
+    ],
+    "scale": 1
+   }
+  },
+  {
+   "id": "waterfall",
+   "name": "Distant waterfall",
+   "content": {
+    "type": "asset",
+    "asset": "waterfall"
+   },
+   "transform": {
+    "position": [
+     5,
+     -2,
+     -96
+    ],
+    "rotationDeg": [
+     0,
+     -8.25,
+     0
+    ],
+    "scale": 1
+   },
+   "components": {
+    "ScrollTexture": {
+     "speedU": 0,
+     "speedV": -0.55
+    }
+   }
+  },
+  {
+   "id": "ridge-0",
+   "name": "Background ridge 0",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "ridge-0"
+   }
+  },
+  {
+   "id": "ridge-1",
+   "name": "Background ridge 1",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "ridge-1"
+   }
+  },
+  {
+   "id": "ridge-2",
+   "name": "Background ridge 2",
+   "framingRole": "support",
+   "content": {
+    "type": "asset",
+    "asset": "ridge-2"
+   }
+  },
+  {
+   "id": "entrance-canopy",
+   "name": "Entrance limb + lianas",
+   "content": {
+    "type": "asset",
+    "asset": "entrance-canopy"
+   }
+  },
+  {
+   "id": "root-arch",
+   "name": "Root arch (landmark)",
+   "content": {
+    "type": "asset",
+    "asset": "root-arch"
+   },
+   "transform": {
+    "position": [
+     4.5,
+     -0.138,
+     -34
+    ],
+    "rotationDeg": [
+     0,
+     5.73,
+     0
+    ]
+   }
+  },
+  {
+   "id": "fallen-giant",
+   "name": "Fallen giant (landmark)",
+   "content": {
+    "type": "asset",
+    "asset": "log-giant"
+   },
+   "transform": {
+    "position": [
+     -6.6,
+     0.24,
+     -31.5
+    ],
+    "rotationDeg": [
+     0,
+     73.34,
+     0
+    ]
+   }
+  },
+  {
+   "id": "veg-deadwood-1-1",
+   "name": "veg deadwood 1 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-1-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-1-2",
+   "name": "veg deadwood 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-1-3",
+   "name": "veg deadwood 1 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-1-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-2-1",
+   "name": "veg deadwood 2 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-2-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-2-2",
+   "name": "veg deadwood 2 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-2-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-2-3",
+   "name": "veg deadwood 2 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-2-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-2-4",
+   "name": "veg deadwood 2 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-2-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-3-1",
+   "name": "veg deadwood 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-3-2",
+   "name": "veg deadwood 3 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-3-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-deadwood-3-3",
+   "name": "veg deadwood 3 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-3-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-1-1",
+   "name": "veg ground 1 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-1-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-1-2",
+   "name": "veg ground 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-1-3",
+   "name": "veg ground 1 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-1-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-2-0",
+   "name": "veg ground 2 0",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-2-0"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-2-1",
+   "name": "veg ground 2 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-2-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-2-2",
+   "name": "veg ground 2 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-2-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-2-3",
+   "name": "veg ground 2 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-2-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-2-4",
+   "name": "veg ground 2 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-2-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-3-1",
+   "name": "veg ground 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-3-2",
+   "name": "veg ground 3 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-3-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-3-3",
+   "name": "veg ground 3 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-3-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-ground-3-4",
+   "name": "veg ground 3 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-ground-3-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-1-1",
+   "name": "veg plants 1 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-1-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-1-2",
+   "name": "veg plants 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-1-3",
+   "name": "veg plants 1 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-1-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-1-4",
+   "name": "veg plants 1 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-1-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-2-1",
+   "name": "veg plants 2 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-2-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-2-2",
+   "name": "veg plants 2 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-2-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-2-3",
+   "name": "veg plants 2 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-2-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-2-4",
+   "name": "veg plants 2 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-2-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-3-1",
+   "name": "veg plants 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-3-2",
+   "name": "veg plants 3 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-3-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-3-3",
+   "name": "veg plants 3 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-3-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-plants-3-4",
+   "name": "veg plants 3 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-plants-3-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-1-1",
+   "name": "veg rocks 1 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-1-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-1-2",
+   "name": "veg rocks 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-1-3",
+   "name": "veg rocks 1 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-1-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-1-4",
+   "name": "veg rocks 1 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-1-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-2-1",
+   "name": "veg rocks 2 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-2-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-2-2",
+   "name": "veg rocks 2 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-2-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-2-3",
+   "name": "veg rocks 2 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-2-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-2-4",
+   "name": "veg rocks 2 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-2-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-3-1",
+   "name": "veg rocks 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-3-2",
+   "name": "veg rocks 3 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-3-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-3-3",
+   "name": "veg rocks 3 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-3-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-rocks-3-4",
+   "name": "veg rocks 3 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-3-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-0-2",
+   "name": "veg trees-far 0 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-0-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-0-3",
+   "name": "veg trees-far 0 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-0-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-0-4",
+   "name": "veg trees-far 0 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-0-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-1-0",
+   "name": "veg trees-far 1 0",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-1-0"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-1-1",
+   "name": "veg trees-far 1 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-1-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-1-2",
+   "name": "veg trees-far 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-1-3",
+   "name": "veg trees-far 1 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-1-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-1-4",
+   "name": "veg trees-far 1 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-1-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-1-5",
+   "name": "veg trees-far 1 5",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-1-5"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-2-0",
+   "name": "veg trees-far 2 0",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-2-0"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-2-5",
+   "name": "veg trees-far 2 5",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-2-5"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-3-0",
+   "name": "veg trees-far 3 0",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-3-0"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-3-1",
+   "name": "veg trees-far 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-3-2",
+   "name": "veg trees-far 3 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-3-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-3-3",
+   "name": "veg trees-far 3 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-3-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-3-4",
+   "name": "veg trees-far 3 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-3-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-3-5",
+   "name": "veg trees-far 3 5",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-3-5"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-far-4-2",
+   "name": "veg trees-far 4 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-far-4-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-1-2",
+   "name": "veg trees-hi 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-2-0",
+   "name": "veg trees-hi 2 0",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-2-0"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-2-1",
+   "name": "veg trees-hi 2 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-2-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-2-2",
+   "name": "veg trees-hi 2 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-2-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-2-3",
+   "name": "veg trees-hi 2 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-2-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-2-4",
+   "name": "veg trees-hi 2 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-2-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-3-1",
+   "name": "veg trees-hi 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-3-4",
+   "name": "veg trees-hi 3 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-3-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-1-2",
+   "name": "veg trees-lo 1 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-1-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-2-0",
+   "name": "veg trees-lo 2 0",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-2-0"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-2-1",
+   "name": "veg trees-lo 2 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-2-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-2-2",
+   "name": "veg trees-lo 2 2",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-2-2"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-2-3",
+   "name": "veg trees-lo 2 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-2-3"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-2-4",
+   "name": "veg trees-lo 2 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-2-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-3-1",
+   "name": "veg trees-lo 3 1",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-3-1"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-3-4",
+   "name": "veg trees-lo 3 4",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-3-4"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "temple",
+   "name": "Overgrown temple",
+   "content": {
+    "type": "asset",
+    "asset": "temple",
+    "castShadow": true,
+    "receiveShadow": true
+   },
+   "transform": {
+    "position": [
+     0,
+     -0.017,
+     -69.5
+    ]
+   }
+  },
+  {
+   "id": "temple-growth",
+   "name": "Temple overgrowth",
+   "content": {
+    "type": "asset",
+    "asset": "temple-growth"
+   },
+   "transform": {
+    "position": [
+     0,
+     -0.017,
+     -69.5
+    ]
+   }
+  },
+  {
+   "id": "spire",
+   "name": "Ruined spire (landmark)",
+   "content": {
+    "type": "asset",
+    "asset": "spire",
+    "castShadow": true
+   },
+   "transform": {
+    "position": [
+     -9.5,
+     -0.208,
+     -67
+    ]
+   }
+  },
+  {
+   "id": "spire-growth",
+   "name": "Spire overgrowth",
+   "content": {
+    "type": "asset",
+    "asset": "spire-growth"
+   },
+   "transform": {
+    "position": [
+     -9.5,
+     -0.208,
+     -67
+    ]
+   }
+  },
+  {
+   "id": "altar",
+   "name": "Ancient altar",
+   "content": {
+    "type": "asset",
+    "asset": "altar",
+    "castShadow": true,
+    "receiveShadow": true
+   },
+   "transform": {
+    "position": [
+     0,
+     -0.023,
+     -61.5
+    ],
+    "rotationDeg": [
+     0,
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "id": "ruin-pillars",
+   "name": "Ruined pillars",
+   "content": {
+    "type": "asset",
+    "asset": "ruin-pillars",
+    "castShadow": true,
+    "receiveShadow": true
+   }
+  },
+  {
+   "id": "heartstone",
+   "name": "Heartstone (grabbable relic)",
+   "metadata": {
+    "jumanji.role": "relic"
+   },
+   "content": {
+    "type": "asset",
+    "asset": "heartstone",
+    "castShadow": true
+   },
+   "transform": {
+    "position": [
+     0,
+     0.947,
+     -61.5
+    ],
+    "rotationDeg": [
+     0,
+     0,
+     0
+    ],
+    "scale": 1
+   },
+   "components": {
+    "Relic": {
+     "restOffset": 0.03
+    },
+    "OneHandGrabbable": {}
+   }
+  },
+  {
+   "id": "light-shafts",
+   "name": "Light shafts",
+   "content": {
+    "type": "asset",
+    "asset": "light-shafts"
+   },
+   "components": {
+    "Shimmer": {
+     "speed": 0.3,
+     "amount": 0.22
+    }
+   }
+  },
+  {
+   "id": "ground-mists",
+   "name": "Ground mist",
+   "content": {
+    "type": "asset",
+    "asset": "ground-mists"
+   }
+  },
+  {
+   "id": "welcome-panel",
+   "name": "Expedition board",
+   "content": {
+    "type": "asset",
+    "asset": "welcome-panel"
+   },
+   "transform": {
+    "position": [
+     2.5,
+     1.5,
+     8.5
+    ],
+    "rotationDeg": [
+     0,
+     -30,
+     0
+    ],
+    "scale": 0.24
+   },
+   "components": {
+    "RayInteractable": {}
+   }
+  },
+  {
+   "id": "sun",
+   "name": "Sun",
+   "transform": {
+    "position": [
+     20,
+     30,
+     -51.5
+    ],
+    "rotationDeg": [
+     -67.62,
+     36.79,
+     25.11
+    ]
+   },
+   "components": {
+    "DirectionalLight": {
+     "color": [
+      1,
+      0.9,
+      0.72,
+      1
+     ],
+     "intensity": 3.1,
+     "castShadow": true,
+     "shadowMapSize": "1024",
+     "shadowCameraSize": 9,
+     "shadowCameraNear": 2,
+     "shadowCameraFar": 60,
+     "shadowBias": -0.0006,
+     "shadowNormalBias": 0.03,
+     "shadowRadius": 3
+    }
+   }
+  },
+  {
+   "id": "canopy-fill",
+   "name": "Canopy fill",
+   "components": {
+    "HemisphereLight": {
+     "skyColor": [
+      0.5,
+      0.72,
+      0.62,
+      1
+     ],
+     "groundColor": [
+      0.17,
+      0.2,
+      0.1,
+      1
+     ],
+     "intensity": 1.25
+    }
+   }
+  }
+ ]
+}

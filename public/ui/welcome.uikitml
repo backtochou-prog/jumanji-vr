@@ -1,0 +1,120 @@
+<!--
+  Expedition board: title, controls, live XR status, comfort toggles.
+  Panel, Button, ButtonIcon, ButtonLabel come from the bundled Horizon kit.
+  Sizes are plain px; the scene node scales the whole panel into metres.
+-->
+<style>
+  .panel-root {
+    flex-direction: column;
+    width: 460px;
+  }
+  .panel-content {
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 22px;
+    padding-left: 24px;
+    padding-right: 24px;
+    padding-bottom: 12px;
+  }
+  .eyebrow {
+    color: #f0c869;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+  }
+  .heading {
+    color: #f6f3e8;
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 38px;
+  }
+  .body {
+    color: #d9dccf;
+    font-size: 18px;
+    line-height: 25px;
+  }
+  .status {
+    color: #8fd9b5;
+    font-size: 16px;
+    line-height: 22px;
+    margin-top: 6px;
+  }
+  .row {
+    flex-direction: row;
+    gap: 8px;
+    margin-left: 24px;
+    margin-right: 24px;
+    margin-bottom: 10px;
+  }
+  .button {
+    justify-content: flex-start;
+    margin-left: 24px;
+    margin-right: 24px;
+    margin-bottom: 10px;
+  }
+  .chip {
+    flex-grow: 1;
+  }
+  .button-label {
+    transform-translate-y: 1px;
+  }
+</style>
+<Panel class="panel-root">
+  <div class="panel-content">
+    <div class="eyebrow">JUMANJI VR - PROTOTYPE 01</div>
+    <div class="heading">Into the jungle</div>
+    <div class="body">Left stick: walk - Right stick: turn</div>
+    <div class="body">Hold the grip button near an object to grab it</div>
+    <div class="body">Follow the trail to the ancient clearing.</div>
+    <div id="status" class="status">Checking for VR...</div>
+  </div>
+  <Button id="xr-button" class="button">
+    <ButtonIcon>
+      <RectangleGoggles></RectangleGoggles>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Enter VR</ButtonLabel>
+  </Button>
+  <Button id="exit-button" class="button" style="display: none">
+    <ButtonIcon>
+      <LogIn></LogIn>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Exit to browser</ButtonLabel>
+  </Button>
+  <div class="row">
+    <Button id="turn-button" class="chip">
+      <ButtonLabel id="turn-label">Snap turn 30 deg</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row">
+    <Button id="quality-button" class="chip">
+      <ButtonLabel id="quality-label">Quality high</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row">
+    <Button id="perf-button" class="chip">
+      <ButtonLabel id="perf-label">Diagnostics off</ButtonLabel>
+    </Button>
+    <Button id="copy-button" class="chip">
+      <ButtonLabel id="copy-label">Copy results</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row">
+    <Button id="test-entrance-button" class="chip">
+      <ButtonLabel>Test: entrance</ButtonLabel>
+    </Button>
+    <Button id="test-trail-button" class="chip">
+      <ButtonLabel>trail</ButtonLabel>
+    </Button>
+    <Button id="test-clearing-button" class="chip">
+      <ButtonLabel>clearing</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row">
+    <Button id="speed-button" class="chip">
+      <ButtonLabel id="speed-label">Speed 2.5 m/s</ButtonLabel>
+    </Button>
+    <Button id="vignette-button" class="chip">
+      <ButtonLabel id="vignette-label">Vignette 50%</ButtonLabel>
+    </Button>
+  </div>
+</Panel>

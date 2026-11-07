@@ -1,0 +1,43 @@
+import { createSystem, LocomotionSystem, Vector3 } from '@iwsdk/core';
+import { placePlayer } from '../diagnostics/perf-test.js';
+import { ALTAR, FORD, SPAWN, terrainHeight } from '../world/layout.js';
+
+/**
+ * Jump-to-area shortcuts for testing (URL only; the normal start is the authored spawn):
+ *   ?area=entrance | trail | clearing | altar     or   ?start=x,z   (+ &yaw=deg)
+ *   (the repeatable performance poses live in TEST_POSES and are used by ?test=, see diagnostics/perf-test.ts)
+ * Handy on the headset: open the page with ?area=clearing to review the ancient
+ * clearing without walking the whole trail. Applied once, as soon as locomotion is ready.
+ */
+export class StartPointSystem extends createSystem({}) {
+  private done = false;
+  private target: Vector3 | null = null;
+  private yaw = 0;
+
+  init(): void {
+    const q = new URLSearchParams(globalThis.location?.search ?? '');
+    let xz: [number, number] | null = null;
+    const area = q.get('area');
+    if (area === 'entrance') xz = [SPAWN[0], SPAWN[1]];
+    if (q.has('yaw')) this.yaw = Number(q.get('yaw')) || 0;
+    if (area === 'trail') xz = [FORD.x + 1.2, FORD.z + 3.0];
+    if (area === 'clearing') xz = [0, -52];
+    if (area === 'altar') xz = [ALTAR[0], ALTAR[1] + 2.2];
+    const s = q.get('start');
+    if (s) {
+      const [x, z] = s.split(',').map(Number);
+      if (Number.isFinite(x) && Number.isFinite(z)) xz = [x, z];
+    }
+    if (xz) this.target = new Vector3(xz[0], terrainHeight(xz[0], xz[1]), xz[1]);
+    else this.done = true;
+  }
+
+  update(): void {
+    if (this.done || !this.target) return;
+    const loco = this.world.getSystem(LocomotionSystem);
+    if (!loco) return;
+    placePlayer(this.world, this.target.x, this.target.z, this.yaw);
+    this.done = true;
+    console.info(`[jumanji] start point set to (${this.target.x.toFixed(1)}, ${this.target.y.toFixed(2)}, ${this.target.z.toFixed(1)})`);
+  }
+}
