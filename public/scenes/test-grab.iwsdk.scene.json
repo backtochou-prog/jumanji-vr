@@ -55,7 +55,7 @@
   "fog": {
    "type": "exponential",
    "color": "#a9c4b3",
-   "density": 0.0125
+   "density": 0.0095
   }
  },
  "player": {
@@ -252,6 +252,214 @@
      -34
     ],
     "height": 130
+   },
+   {
+    "id": "m-climb",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     58.117,
+     15.741,
+     -64.683
+    ],
+    "target": [
+     58.604,
+     17.124,
+     -53.204
+    ],
+    "fov": 78
+   },
+   {
+    "id": "m-climb-high",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     92.063,
+     32.651,
+     -69.875
+    ],
+    "target": [
+     104.411,
+     35.836,
+     -72.447
+    ],
+    "fov": 78
+   },
+   {
+    "id": "m-summit",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     118.881,
+     35.65,
+     -82.654
+    ],
+    "target": [
+     177.172,
+     29.65,
+     -106.871
+    ],
+    "fov": 84
+   },
+   {
+    "id": "m-summit-down",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     118.881,
+     35.65,
+     -82.654
+    ],
+    "target": [
+     126.653,
+     -4.35,
+     -84.55
+    ],
+    "fov": 84
+   },
+   {
+    "id": "m-summit-fall",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     118.881,
+     35.65,
+     -82.654
+    ],
+    "target": [
+     202,
+     -22,
+     -170
+    ],
+    "fov": 70
+   },
+   {
+    "id": "m-descent",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     91.242,
+     31.242,
+     -110.992
+    ],
+    "target": [
+     98.439,
+     27.224,
+     -123.174
+    ],
+    "fov": 78
+   },
+   {
+    "id": "m-ledge",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     107.886,
+     18.498,
+     -143.661
+    ],
+    "target": [
+     116.355,
+     16.934,
+     -156.773
+    ],
+    "fov": 78
+   },
+   {
+    "id": "m-cleft",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     107.363,
+     18.939,
+     -142.691
+    ],
+    "target": [
+     114.761,
+     17.116,
+     -154.664
+    ],
+    "fov": 78
+   },
+   {
+    "id": "m-bridge-w",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     172.5,
+     11.95,
+     -193
+    ],
+    "target": [
+     198.6,
+     10.9,
+     -193
+    ],
+    "fov": 80
+   },
+   {
+    "id": "m-bridge-mid",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     186.8,
+     11.15,
+     -193
+    ],
+    "target": [
+     187.8,
+     -3.7,
+     -185
+    ],
+    "fov": 84
+   },
+   {
+    "id": "m-bridge-cascade",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     184,
+     11.15,
+     -193
+    ],
+    "target": [
+     187,
+     20,
+     -215
+    ],
+    "fov": 80
+   },
+   {
+    "id": "m-brink",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     202.9,
+     11.65,
+     -188.9
+    ],
+    "target": [
+     190,
+     -8,
+     -178
+    ],
+    "fov": 84
+   },
+   {
+    "id": "m-top",
+    "role": "diagnostic",
+    "projection": "orthographic",
+    "position": [
+     200,
+     160,
+     -150
+    ],
+    "target": [
+     200,
+     0,
+     -150
+    ],
+    "height": 340
    }
   ]
  },
@@ -293,8 +501,8 @@
    "transform": {
     "position": [
      0,
-     -0.017,
-     -69.5
+     -0.811,
+     -74
     ]
    }
   },
@@ -401,7 +609,7 @@
      "intensity": 3.1,
      "castShadow": true,
      "shadowMapSize": "1024",
-     "shadowCameraSize": 9,
+     "shadowCameraSize": 8,
      "shadowCameraNear": 2,
      "shadowCameraFar": 60,
      "shadowBias": -0.0006,

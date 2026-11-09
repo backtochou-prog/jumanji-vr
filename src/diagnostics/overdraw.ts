@@ -1,6 +1,6 @@
 import { AdditiveBlending, Color, Mesh, MeshBasicMaterial, NoBlending, UnsignedByteType, WebGLRenderTarget } from '@iwsdk/core';
 import type { Material, Object3D, World } from '@iwsdk/core';
-import { foliageCardMaterial, lightShaftMaterial } from '../scene-assets/lib/materials.js';
+import { foliageCardMaterial, lightShaftMaterial, plantFoliageMaterial } from '../scene-assets/lib/materials.js';
 
 /**
  * Overdraw meter: how many fragments the GPU is asked to shade per screen pixel, per material
@@ -43,7 +43,7 @@ export interface OverdrawReport {
 const STEP = 8;
 
 function classify(m: Material): 'card' | 'additive' | 'shaft' | 'opaque' {
-  if (m === foliageCardMaterial) return 'card';
+  if (m === foliageCardMaterial || m === plantFoliageMaterial) return 'card';
   if (m === lightShaftMaterial) return 'shaft';
   if ((m as { transparent?: boolean }).transparent) return 'additive';
   return 'opaque';
@@ -87,7 +87,8 @@ export function measureOverdraw(world: World, height = 300): OverdrawReport {
   const meshes: { mesh: Mesh; mat: Material; cls: 'card' | 'additive' | 'shaft' | 'opaque'; vis: boolean }[] = [];
   world.scene.traverse((o: Object3D) => {
     const m = o as Mesh;
-    if (!m.isMesh || m.name === 'PerfOverlay') return;
+    // The wildlife (instanced, a few hundred pixels) is left out: overriding its materials would only make the meter compile throw-away shader variants.
+    if (!m.isMesh || m.name === 'PerfOverlay' || m.name.startsWith('Wildlife')) return;
     const mat = Array.isArray(m.material) ? m.material[0] : m.material;
     // Only what is actually drawn this frame (respects LOD visibility).
     let vis = true;
@@ -95,6 +96,10 @@ export function measureOverdraw(world: World, height = 300): OverdrawReport {
     meshes.push({ mesh: m, mat, cls: classify(mat), vis });
   });
 
+  // hide the wildlife group while measuring: rendered into the meter's render target it would only create throw-away shader variants
+  const wildlife = world.scene.getObjectByName('Wildlife');
+  const wildlifeWas = wildlife?.visible ?? false;
+  if (wildlife) wildlife.visible = false;
   const prevTarget = renderer.getRenderTarget();
   const prevClear = renderer.getClearColor(new Color());
   const prevAlpha = renderer.getClearAlpha();
@@ -230,6 +235,7 @@ export function measureOverdraw(world: World, height = 300): OverdrawReport {
   pass('shaft', false, true);
   const shaft = read();
 
+  if (wildlife) wildlife.visible = wildlifeWas;
   renderer.setRenderTarget(prevTarget);
   renderer.setClearColor(prevClear, prevAlpha);
   renderer.autoClear = prevAuto;

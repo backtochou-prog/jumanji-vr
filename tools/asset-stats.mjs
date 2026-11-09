@@ -24,14 +24,23 @@ import { fileURLToPath } from 'node:url';
 
 const CHECK = process.argv.includes('--check');
 const BUDGET = {
-  submittedTris: 250_000,
-  submittedDraws: 150,
-  visibleTris: 170_000, // worst viewpoint
-  visibleDraws: 100, // worst viewpoint, excludes SDK/UI draws (~10)
+  submittedTris: 560_000, // everything the scene contains (the mountain adds a valley, 80+ terrain tiles, ~200 vegetation cells); only a fraction is ever drawn
+  submittedDraws: 340,
+  visibleTris: 195_000, // worst jungle viewpoint: the earlier 170k + 16k wildlife reserve (below) + ~6k for the perch boughs now on every tree + margin
+  visibleDraws: 116, // worst jungle viewpoint, excludes SDK/UI draws (~10): scene (was 100) + the wildlife reserve below
+  mtnTris: 170_000, // worst mountain viewpoint (the overlooks see a whole valley; the far field is merged and distance-capped)
+  mtnDraws: 100,
   materials: 16,
   textureMB: 8,
-  buildMs: 1200, // desktop (module eval + procedural build); Quest 2 is several times slower
+  buildMs: 2600, // desktop (module eval + procedural build); Quest 2 is several times slower (the mountain terrain is ~0.6 s of it)
 };
+
+/**
+ * Wildlife is created at run time (src/wildlife), not by the asset manifest, so it is not in the numbers below. It is added to each viewpoint as a
+ * RESERVE taken from `node tools/wildlife-test.mjs --browser` (measured: +12..14 draws and up to +16k triangles at the three jungle stations with every
+ * creature type in view; the mountain only has the 4 soaring birds). The audit (npm run audit) then measures the real total.
+ */
+const WILDLIFE = { jungle: { tris: 16_000, draws: 16 }, mountain: { tris: 3_000, draws: 3 } };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const server = await createServer({ root, configFile: false, logLevel: 'error', appType: 'custom', server: { middlewareMode: true }, optimizeDeps: { noDiscovery: true } });
@@ -69,7 +78,7 @@ try {
       verts += g.getAttribute('position').count;
       const t = (g.index ? g.index.count : g.getAttribute('position').count) / 3;
       tris += t;
-      meshes.push({ sphere: g.boundingSphere.clone().applyMatrix4(o.matrixWorld), tris: t });
+      meshes.push({ sphere: g.boundingSphere.clone().applyMatrix4(o.matrixWorld), tris: t, mesh: o.name });
       (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
         mats.add(m);
         materials.add(m);
@@ -103,7 +112,7 @@ try {
       const sc = typeof node.transform?.scale === 'number' ? node.transform.scale : 1;
       for (const m of s.meshes) {
         const cm = /^veg-(\S+)-(\d+)-(\d+)$/.exec(c.asset);
-        draws.push({ x: m.sphere.center.x * sc + p[0], y: m.sphere.center.y * sc + p[1], z: m.sphere.center.z * sc + p[2], r: m.sphere.radius * sc, tris: m.tris, name: c.asset, chunk: cm ? { cls: cm[1], ix: Number(cm[2]), iz: Number(cm[3]) } : null });
+        draws.push({ x: m.sphere.center.x * sc + p[0], y: m.sphere.center.y * sc + p[1], z: m.sphere.center.z * sc + p[2], r: m.sphere.radius * sc, tris: m.tris, name: c.asset, mesh: m.mesh, chunk: cm ? { cls: cm[1], ix: Number(cm[2]), iz: Number(cm[3]) } : null });
         total += m.tris;
         perAsset[c.asset] = (perAsset[c.asset] ?? 0) + m.tris;
       }
@@ -151,7 +160,7 @@ try {
 
   // ---- 4. visible estimate ------------------------------------------------------------------
   const L = await server.ssrLoadModule('/src/world/layout.ts');
-  const FAR = 100;
+  const FAR = L.JUNGLE_FAR;
   const H = (96 * Math.PI) / 360; // half horizontal fov
   const V = (90 * Math.PI) / 360;
   const planes = (px, py, pz, yaw, pitch) => {
@@ -173,11 +182,42 @@ try {
   let LOW = false; // evaluate the 'low' tier rules
   const visible = (cam, d) => {
     // Distance LOD rules (shared with the runtime ChunkLodSystem).
-    if (d.chunk && !L.chunkVisible(d.chunk.cls, L.cellDistance(cam.p[0], cam.p[2], d.chunk.ix, d.chunk.iz), LOW)) return false;
-    if (LOW && /^(light-shafts|ground-mists)/.test(d.name)) return false;
+    const open = cam.open ?? 0;
+    const mtnCap = 26 + 974 * open;
+    if (d.chunk) {
+      const size = L.CELL_SIZE[d.chunk.cls];
+      const mountainCell = L.CHUNK_ORIGIN.x + d.chunk.ix * size >= 30;
+      if (!L.chunkVisible(d.chunk.cls, L.cellDistance(cam.p[0], cam.p[2], d.chunk.ix, d.chunk.iz, size), LOW, mountainCell ? Math.min(L.viewCap(open), mtnCap) : Math.min(L.viewCap(open), L.JUNGLE_CELL_CAP))) return false;
+    }
+    if (/^far-range/.test(d.name) && open <= 0.25) return false;
+    if (d.name === 'giant-fall' || d.name === 'fall-mist') {
+      const fd = Math.hypot(d.x - 187, d.z + 168); // the fall's centre (riverPoint(70))
+      if (d.name === 'fall-mist' && (LOW || fd > 480)) return false;
+      if (d.mesh === 'FallNear' && fd >= 240) return false;
+      if (d.mesh === 'FallFar' && fd < 240) return false;
+    }
+    if (/^ridge-\d$/.test(d.name) && open >= 0.5) return false;
+    // jungle landmarks and tiles are only drawn within 150 m of the player (ChunkLodSystem)
+    if ((d.mesh && /^Terrain_\d+_\d+$/.test(d.mesh)) || /^(temple|temple-growth|spire|spire-growth|altar|ruin-pillars|entrance-canopy|water|cliff|waterfall|root-arch|log-giant)$/.test(d.name)) { if (Math.hypot(d.x - cam.p[0], d.z - cam.p[2]) - d.r > L.JUNGLE_LANDMARK_CAP) return false; }
+    if (d.mesh === 'Mountain_far' && cam.p[0] < 35 - mtnCap) return false; // its box starts at x = 35 (the runtime tests the box, the estimate has only a sphere)
+    {
+      // terrain LOD: a detailed 96 m root shows fine tiles within 150 m (100 m low) and one coarse mesh beyond
+      const rm = d.mesh && /^(?:Mountain_(\d+)_(\d+)_\d+|MtnCoarse_(\d+)_(\d+))$/.exec(d.mesh);
+      if (rm) {
+        const ri = Number(rm[1] ?? rm[3]), rj = Number(rm[2] ?? rm[4]);
+        const x0 = L.TERRAIN_LOD.x0 + ri * 96, z0 = L.TERRAIN_LOD.z0 + rj * 96;
+        const dist = Math.hypot(Math.max(x0 - cam.p[0], 0, cam.p[0] - (x0 + 96)), Math.max(z0 - cam.p[2], 0, cam.p[2] - (z0 + 96)));
+        const near = dist < (LOW ? L.TERRAIN_LOD.fineLow : L.TERRAIN_LOD.fine);
+        if (rm[1] !== undefined ? !near : near) return false;
+        if (dist > mtnCap) return false;
+      }
+    }
+    if (/^(rope-bridge|mountain-water|collapse-shelf)$/.test(d.name) && Math.hypot(d.x - cam.p[0], d.z - cam.p[2]) - d.r > mtnCap) return false;
+    if (d.mesh && /^RouteTrail_/.test(d.mesh) && Math.hypot(d.x - cam.p[0], d.z - cam.p[2]) - d.r > mtnCap) return false;
+    if (LOW && /^(light-shafts|ground-mists|fall-mist)/.test(d.name)) return false;
     const dx = d.x - cam.p[0], dy = d.y - cam.p[1], dz = d.z - cam.p[2];
     if (dx * cam.fwd[0] + dy * cam.fwd[1] + dz * cam.fwd[2] < -d.r) return false; // behind
-    if (Math.hypot(dx, dy, dz) - d.r > FAR) return false;
+    if (Math.hypot(dx, dy, dz) - d.r > (cam.far ?? FAR)) return false;
     return cam.ps.every((n) => dx * n[0] + dy * n[1] + dz * n[2] >= -d.r);
   };
   const views = [];
@@ -193,10 +233,19 @@ try {
   for (const t of Object.values(L.TEST_POSES)) addView(`TEST ${t.id} (headset test pose)`, t.x, t.z, (-t.yawDeg * Math.PI) / 180);
   addView('altar (facing temple)', L.ALTAR[0], L.ALTAR[1] + 2.5, 0);
   addView('altar (looking back)', L.ALTAR[0], L.ALTAR[1] + 2.5, Math.PI);
-  console.log('\n4. visible estimate from standing viewpoints (CPU frustum test, 96x90 deg, 100 m)');
-  let worstT = 0, worstD = 0;
+  // Mountain stations: eye height above the feet, far plane and fog open up with height (AtmosphereSystem).
+  for (const [id, v] of Object.entries(L.MTN_VIEWS)) {
+    const open = Math.min(1, Math.max(0, (v.y - 3) / 9));
+    const cam = planes(v.x, v.y + 1.65, v.z, (-v.yawDeg * Math.PI) / 180, (v.pitchDeg * Math.PI) / 180);
+    cam.far = L.JUNGLE_FAR + (1000 - L.JUNGLE_FAR) * open;
+    cam.open = open;
+    views.push({ name: `MTN ${id}`, cam });
+  }
+  console.log('\n4. visible estimate from standing viewpoints (CPU frustum test, 96x90 deg, far plane per AtmosphereSystem)');
+  let worstT = 0, worstD = 0, worstMT = 0, worstMD = 0;
   for (const v of views) {
-    let tris = 0, n = 0;
+    const mtnView = v.name.startsWith('MTN ');
+    let tris = mtnView ? WILDLIFE.mountain.tris : WILDLIFE.jungle.tris, n = mtnView ? WILDLIFE.mountain.draws : WILDLIFE.jungle.draws;
     for (const d of draws) {
       if (visible(v.cam, d)) {
         // A cell is one mesh: the GPU draws the whole cell when any part is inside the frustum (matches three.js culling).
@@ -204,17 +253,21 @@ try {
         n++;
       }
     }
-    worstT = Math.max(worstT, tris);
-    worstD = Math.max(worstD, n);
+    if (v.name.startsWith('MTN ')) { worstMT = Math.max(worstMT, tris); worstMD = Math.max(worstMD, n); }
+    else { worstT = Math.max(worstT, tris); worstD = Math.max(worstD, n); }
     if (process.argv.includes('--breakdown')) {
       const by = {};
-      for (const d of draws) if (visible(v.cam, d)) by[d.chunk ? d.chunk.cls : d.name.split(' ')[0]] = (by[d.chunk ? d.chunk.cls : d.name.split(' ')[0]] ?? 0) + d.tris;
-      console.log('      ' + Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 9).map(([k, t]) => `${k} ${(t / 1000).toFixed(0)}k`).join('  '));
+      const byN = {};
+      for (const d of draws) if (visible(v.cam, d)) { const k = d.chunk ? d.chunk.cls : d.name.split(' ')[0].replace(/[0-9_]+$/, ''); by[k] = (by[k] ?? 0) + d.tris; byN[k] = (byN[k] ?? 0) + 1; }
+      console.log('      draws: ' + Object.entries(byN).sort((a, b) => b[1] - a[1]).slice(0, 9).map(([k, n]) => `${k} ${n}`).join('  '));
+      console.log('      ' + Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k, t]) => `${k} ${(t / 1000).toFixed(1)}k`).join('  '));
     }
     console.log(`   ${v.name.padEnd(26)} ${String(n).padStart(4)} draws  ${Math.round(tris).toLocaleString().padStart(9)} tris`);
   }
-  over('worst-view triangles', worstT, BUDGET.visibleTris);
-  over('worst-view draw calls', worstD, BUDGET.visibleDraws);
+  over('worst jungle-view triangles', worstT, BUDGET.visibleTris);
+  over('worst jungle-view draw calls', worstD, BUDGET.visibleDraws);
+  over('worst mountain-view triangles', worstMT, BUDGET.mtnTris);
+  over('worst mountain-view draw calls', worstMD, BUDGET.mtnDraws);
   // 'low' tier: same viewpoints with the low-tier LOD rules and no shafts/mist
   LOW = true;
   let lowT = 0, lowD = 0;
@@ -223,9 +276,9 @@ try {
     let tris = 0, n = 0;
     for (const d of draws) if (visible(v.cam, d)) { tris += d.tris; n++; }
     lowT = Math.max(lowT, tris); lowD = Math.max(lowD, n);
-    if (v.name.startsWith('TEST')) lowRows.push(`${v.name.padEnd(36)} ${String(n).padStart(4)} draws ${Math.round(tris).toLocaleString().padStart(9)} tris`);
+    if (v.name.startsWith('TEST') || ['MTN summit-down', 'MTN summit-fall', 'MTN descent', 'MTN bridge-mid', 'MTN brink'].includes(v.name)) lowRows.push(`${v.name.padEnd(36)} ${String(n).padStart(4)} draws ${Math.round(tris).toLocaleString().padStart(9)} tris`);
   }
-  console.log("\n   'low' tier at the three headset test poses (worst low-tier view: " + lowD + ' draws, ' + Math.round(lowT).toLocaleString() + ' tris):');
+  console.log("\n   'low' tier at the headset test poses (worst low-tier view: " + lowD + ' draws, ' + Math.round(lowT).toLocaleString() + ' tris):');
   lowRows.forEach((r) => console.log('     ' + r));
   LOW = false;
   console.log('\n   NOTE: estimates of submitted work only. Frame time on a Quest 2 (fill-rate bound) must be measured on the device.');

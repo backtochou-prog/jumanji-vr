@@ -13,21 +13,28 @@
  * is solid (see colliders); the player stays on the ground around it.
  */
 import { CylinderGeometry, Mesh, Vector3 } from '@iwsdk/core';
-import { TEMPLE, makeRandom } from '../world/layout.js';
+import { SCALE, SPIRE, TEMPLE, makeRandom } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import { cardGeometry, lerpColor, mat, mergeParts, softNormals, solidUV, tubeAlong } from './lib/geo.js';
 import type { Part } from './lib/geo.js';
 import { foliageCardMaterial, ruinStoneMaterial } from './lib/materials.js';
 import { bevelBox, masonry, stoneColor } from './ruins.scene-asset.js';
 
-/** Tier table: [width, depth, height, z-offset]. */
+/** The temple is authored at its DESIGN size and baked at SCALE.temple (see layout.ts), so proportions never drift between the mesh and its colliders. */
+const S = SCALE.temple;
+const DW = TEMPLE.width / S;
+const DD = TEMPLE.depth / S;
+
+/** Tier table: [width, depth, height, z-offset] (design metres). */
 const TIERS: [number, number, number, number][] = [
-  [TEMPLE.width, TEMPLE.depth, 0.5, 0],
-  [TEMPLE.width - 2.6, TEMPLE.depth - 1.9, 0.5, -0.55],
-  [TEMPLE.width - 5.2, TEMPLE.depth - 3.8, 0.45, -1.1],
+  [DW, DD, 0.5, 0],
+  [DW - 2.6, DD - 1.9, 0.5, -0.55],
+  [DW - 5.2, DD - 3.8, 0.45, -1.1],
 ];
-export const TEMPLE_TOP_Y = 0.5 + 0.5 + 0.45;
-const WALL_Z = -TEMPLE.depth / 2 + 0.9;
+/** Platform top height, in WORLD metres. */
+export const TEMPLE_TOP_Y = (0.5 + 0.5 + 0.45) * S;
+const TOP = 0.5 + 0.5 + 0.45; // design
+const WALL_Z = -DD / 2 + 0.9;
 const LEFT_W = 3.4;
 const RIGHT_W = 3.2;
 const GAP = 2.4;
@@ -40,13 +47,22 @@ const COLS = [
   { x: 3.6, z: -1.6, h: 3.4, broken: false },
 ];
 
+/** Uniform bake of a design-size geometry to world metres (positions only; normals are unchanged by a uniform scale). */
+function bake(geo: import('@iwsdk/core').BufferGeometry, k: number): void {
+  geo.scale(k, k, k);
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+}
+void SPIRE;
+
 /** Solid boxes (local frame, centre + size) for the collision proxy: platform, wall sections, columns. */
 export function templeSolids(): { x: number; y: number; z: number; w: number; h: number; d: number }[] {
-  const out: { x: number; y: number; z: number; w: number; h: number; d: number }[] = [{ x: 0, y: TEMPLE_TOP_Y / 2, z: 0, w: TEMPLE.width, h: TEMPLE_TOP_Y, d: TEMPLE.depth }];
-  out.push({ x: WALL_X0, y: TEMPLE_TOP_Y + 2.8, z: WALL_Z, w: LEFT_W, h: 5.6, d: 1.0 });
-  out.push({ x: WALL_X1, y: TEMPLE_TOP_Y + 1.7, z: WALL_Z, w: RIGHT_W, h: 3.4, d: 1.0 });
-  for (const c of COLS) out.push({ x: c.x, y: TEMPLE_TOP_Y + c.h / 2, z: c.z, w: 0.9, h: c.h, d: 0.9 });
-  return out;
+  const out: { x: number; y: number; z: number; w: number; h: number; d: number }[] = [{ x: 0, y: TOP / 2, z: 0, w: DW, h: TOP, d: DD }];
+  out.push({ x: WALL_X0, y: TOP + 2.8, z: WALL_Z, w: LEFT_W, h: 5.6, d: 1.0 });
+  out.push({ x: WALL_X1, y: TOP + 1.7, z: WALL_Z, w: RIGHT_W, h: 3.4, d: 1.0 });
+  for (const c of COLS) out.push({ x: c.x, y: TOP + c.h / 2, z: c.z, w: 0.9, h: c.h, d: 0.9 });
+  // baked at the temple scale: these are the WORLD-metre boxes the collision proxy uses
+  return out.map((b) => ({ x: b.x * S, y: b.y * S, z: b.z * S, w: b.w * S, h: b.h * S, d: b.d * S }));
 }
 
 function fluted(radius: number, height: number, seed: number, broken: boolean): Part[] {
@@ -76,7 +92,7 @@ export function createTemple(): Mesh {
     parts.push({ geo: bevelBox(w, h, d, 0.06), m: mat(0, y + h / 2 - 0.02, zo, 0, (rng() - 0.5) * 0.03), color: masonry(10 + i, 0.55, 0.5, 14) });
     y += h;
   });
-  const top = TEMPLE_TOP_Y;
+  const top = TOP;
   // Back wall: left tall broken section, right shorter, arched doorway between.
   const leftW = LEFT_W;
   const rightW = RIGHT_W;
@@ -135,9 +151,11 @@ export function createTemple(): Mesh {
     for (const p of fluted(0.42, c.h, 170 + i, c.broken)) parts.push({ ...p, m: mat(c.x, top, c.z).multiply(p.m ?? mat()) });
   });
   // Fallen drum and lintel on the steps/ground in front.
-  parts.push({ geo: new CylinderGeometry(0.42, 0.42, 1.1, 12), m: mat(-2.0, 0.42, TEMPLE.depth / 2 + 0.9, 0, 0, Math.PI / 2).multiply(mat(0, 0, 0)), color: stoneColor(200, 0.9) });
-  parts.push({ geo: bevelBox(2.4, 0.5, 0.7, 0.06, 1), m: mat(2.3, 0.18, TEMPLE.depth / 2 + 1.1, 0.05, 0.4, 0.08), color: stoneColor(201, 0.95) });
-  const m = new Mesh(mergeParts(parts), ruinStoneMaterial);
+  parts.push({ geo: new CylinderGeometry(0.42, 0.42, 1.1, 12), m: mat(-2.0, 0.42, DD / 2 + 0.9, 0, 0, Math.PI / 2).multiply(mat(0, 0, 0)), color: stoneColor(200, 0.9) });
+  parts.push({ geo: bevelBox(2.4, 0.5, 0.7, 0.06, 1), m: mat(2.3, 0.18, DD / 2 + 1.1, 0.05, 0.4, 0.08), color: stoneColor(201, 0.95) });
+  const geo = mergeParts(parts);
+  bake(geo, S);
+  const m = new Mesh(geo, ruinStoneMaterial);
   m.name = 'Temple';
   m.castShadow = true;
   m.receiveShadow = true;
@@ -148,7 +166,7 @@ export function createTemple(): Mesh {
 export function createTempleGrowth(): Mesh {
   const rng = makeRandom(4321);
   const parts: Part[] = [];
-  const top = TEMPLE_TOP_Y;
+  const top = TOP;
   const lo = lerpColor(PAL.leafShade, PAL.leafMid, 0.4);
   const hi = lerpColor(PAL.leafLight, PAL.leafSun, 0.3);
   const up = new Vector3(0, 1, 0);
@@ -178,7 +196,7 @@ export function createTempleGrowth(): Mesh {
   }
   for (let t = 0; t < TIERS.length; t++) {
     const [w, d, , zo] = TIERS[t];
-    const yTop = [0.5, 1.0, TEMPLE_TOP_Y][t];
+    const yTop = [0.5, 1.0, TOP][t];
     for (let i = 0; i < 7; i++) {
       const x = (rng() - 0.5) * w * 0.92;
       const z = zo + (rng() > 0.5 ? 1 : -1) * (d / 2 - 0.25 - rng() * 0.4) * (rng() > 0.3 ? 1 : 0.4);
@@ -191,10 +209,12 @@ export function createTempleGrowth(): Mesh {
       const x = (rng() - 0.5) * w * 0.9;
       const z = zo + (rng() - 0.5) * d * 0.8;
       const s = 0.8 + rng() * 0.6;
-      parts.push({ geo: cardGeometry('moss', s, s, 0, 1), m: mat(x, yTop + 0.012 * i, z, -Math.PI / 2, rng() * 6, 0).multiply(mat(0, -s / 2, 0)), normalFn: () => up.clone(), color: () => lerpColor(PAL.mossDeep, PAL.moss, 0.4 + 0.5 * rng()) });
+      parts.push({ geo: cardGeometry('moss', s, s, 0, 1), m: mat(x, yTop + 0.05 + 0.02 * i, z, -Math.PI / 2, rng() * 6, 0).multiply(mat(0, -s / 2, 0)), normalFn: () => up.clone(), color: () => lerpColor(PAL.mossDeep, PAL.moss, 0.4 + 0.5 * rng()) });
     }
   }
-  const m = new Mesh(mergeParts(parts), foliageCardMaterial);
+  const geo = mergeParts(parts);
+  bake(geo, S);
+  const m = new Mesh(geo, foliageCardMaterial);
   m.name = 'TempleGrowth';
   return m;
 }
@@ -204,7 +224,9 @@ export function createTempleGrowth(): Mesh {
 // ---------------------------------------------------------------------------
 
 /** A ruined tower, 24 m: octagonal drums with window slits, snapped top, leaning a few degrees. */
-export function createSpire(height = 24): Mesh {
+export function createSpire(h = 24): Mesh {
+  const K = h / 24; // authored at 24 m, baked at the requested height
+  const height = 24;
   const rng = makeRandom(555);
   const parts: Part[] = [];
   const tiers = 5;
@@ -231,14 +253,18 @@ export function createSpire(height = 24): Mesh {
     const a = (i / 5) * Math.PI * 2;
     parts.push({ geo: bevelBox(0.9, 0.7 + rng() * 0.9, 0.7, 0.05, 1), m: mat(Math.cos(a) * 0.95, y + 0.3, Math.sin(a) * 0.95, 0, -a, 0), color: stoneColor(330 + i, 0.9) });
   }
-  const m = new Mesh(mergeParts(parts), ruinStoneMaterial);
+  const geo = mergeParts(parts);
+  bake(geo, K);
+  const m = new Mesh(geo, ruinStoneMaterial);
   m.name = 'Spire';
   m.castShadow = true;
   return m;
 }
 
 /** Vines and moss-draped shrubs on the spire (foliage-card material). */
-export function createSpireGrowth(height = 24): Mesh {
+export function createSpireGrowth(h = 24): Mesh {
+  const K = h / 24;
+  const height = 24;
   const rng = makeRandom(556);
   const parts: Part[] = [];
   const lo = lerpColor(PAL.leafShade, PAL.leafMid, 0.4);
@@ -257,7 +283,9 @@ export function createSpireGrowth(height = 24): Mesh {
     const s = 1.6 + rng() * 0.8;
     parts.push({ geo: cardGeometry('clump', s, s, 0, 1), m: mat((rng() - 0.5) * 1.2, height + 0.1, (rng() - 0.5) * 1.2, -0.7, rng() * 6, 0).multiply(mat(0, -s / 2, 0)), normalFn: softNormals(new Vector3(0, height - 0.6, 0), 0.5), color: () => lerpColor(lo, hi, rng()) });
   }
-  const m = new Mesh(mergeParts(parts), foliageCardMaterial);
+  const geo = mergeParts(parts);
+  bake(geo, K);
+  const m = new Mesh(geo, foliageCardMaterial);
   m.name = 'SpireGrowth';
   return m;
 }

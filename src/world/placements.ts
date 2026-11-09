@@ -31,8 +31,10 @@ import {
   MUD_PATCHES,
   PATH_SAMPLES,
   PILLARS,
+  PILLAR_R,
   POOL,
   ROOT_ARCH,
+  MOUNTAIN_GATE_TREES,
   SPAWN,
   SPIRE,
   STREAM_SAMPLES,
@@ -42,6 +44,7 @@ import {
   distanceToPath,
   distanceToStream,
   fbm,
+  inMountainZone,
   makeRandom,
   smoothstep,
   terrainHeight,
@@ -123,7 +126,8 @@ export interface TreePlacement extends Placement {
 }
 
 /** Collider radius at scale 1, per kind (the buttress footprint, not the bare trunk). */
-export const TREE_COLLIDER: Record<TreeKind, number> = { giant: 3.3, tall: 1.65, broad: 1.85, slender: 0.9 };
+/** Buttress footprint radius at scale 1 (m): grown with the species (see GROWTH in trees.scene-asset.ts). */
+export const TREE_COLLIDER: Record<TreeKind, number> = { giant: 4.3, tall: 1.9, broad: 2.1, slender: 1.0 };
 export const TREE_VARIANTS: Record<TreeKind, number> = { giant: 3, tall: 2, broad: 2, slender: 1 };
 
 let treeCache: TreePlacement[] | null = null;
@@ -147,10 +151,10 @@ export function treePlacements(): TreePlacement[] {
   fixed(13.0, -10.5, 'giant', 0, 4.1, 0.92);
   // Landmark: the giant that carries the root arch beside the trail.
   // (the root-arch asset grows from a trunk 4.8 m along its local +X)
-  fixed(ROOT_ARCH.x + 4.8 * Math.cos(ROOT_ARCH.yaw), ROOT_ARCH.z - 4.8 * Math.sin(ROOT_ARCH.yaw), 'giant', 2, ROOT_ARCH.yaw + 1.2, 0.9);
+  fixed(ROOT_ARCH.x + ROOT_ARCH.trunk * Math.cos(ROOT_ARCH.yaw), ROOT_ARCH.z - ROOT_ARCH.trunk * Math.sin(ROOT_ARCH.yaw), 'giant', 2, ROOT_ARCH.yaw + 1.2, 0.8);
   // Clearing rim: a few mature trees frame the open meadow (never in the view corridors).
   fixed(-14.5, -56, 'giant', 2, 0.3, 0.9);
-  fixed(14.8, -60, 'giant', 1, 2.1, 0.88);
+  fixed(12.5, -59.5, 'giant', 1, 2.1, 0.88);
 
   const kindOrder: TreeKind[] = ['tall', 'broad', 'slender', 'tall', 'broad', 'giant'];
   let tries = 0;
@@ -171,8 +175,9 @@ export function treePlacements(): TreePlacement[] {
     if (Math.abs(x - TEMPLE.x) < TEMPLE.width / 2 + 2 + r && Math.abs(z - TEMPLE.z) < TEMPLE.depth / 2 + 2 + r) continue;
     if (Math.hypot(x - POOL.x, z - POOL.z) < POOL.r * 1.7 + r) continue;
     if (distanceToStream(x, z) < r + 1.6) continue;
-    if (Math.hypot(x - ROOT_ARCH.x, z - ROOT_ARCH.z) < 5 + r) continue;
-    if (segDist(x, z, [FALLEN_GIANT.x - 5, FALLEN_GIANT.z + 2], [FALLEN_GIANT.x + 5, FALLEN_GIANT.z - 2]) < 3 + r) continue;
+    if (Math.hypot(x - ROOT_ARCH.x, z - ROOT_ARCH.z) < 5 * ROOT_ARCH.scale + r) continue;
+    if (MOUNTAIN_GATE_TREES.some((g) => Math.hypot(x - g.x, z - g.z) < g.r + r + 0.5)) continue;
+    if (segDist(x, z, [FALLEN_GIANT.x - FALLEN_GIANT.length / 2, FALLEN_GIANT.z + 2], [FALLEN_GIANT.x + FALLEN_GIANT.length / 2, FALLEN_GIANT.z - 2]) < 3 + FALLEN_GIANT.radius + r) continue;
     const talls = kind === 'giant' || kind === 'tall';
     if (talls && corridorClearance(x, z) < r + 1) continue;
     // Density: thicker belts close to the trail, sparser in the open clearing, fewer in the far corners.
@@ -184,8 +189,8 @@ export function treePlacements(): TreePlacement[] {
     if (out.some((o) => Math.hypot(o.x - x, o.z - z) < (o.colliderRadius + r) * 1.15 + 1.0)) continue;
     push({ x, y: terrainHeight(x, z), z, yaw: rng() * TAU, scale, variant: Math.floor(rng() * TREE_VARIANTS[kind]), tiltX: 0, tiltZ: 0 }, kind);
   }
-  treeCache = out;
-  return out;
+  treeCache = out.filter((t) => !inMountainZone(t.x, t.z, t.colliderRadius + 1.6));
+  return treeCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +307,8 @@ export function rockPlacements(): RockPlacement[] {
     if (out.some((o) => Math.hypot(o.x - x, o.z - z) < 3.2)) continue;
     add(x, z, rim ? (rng() > 0.5 ? 'cobble' : 'boulder') : rng() > 0.4 ? 'boulder' : 'slab', rim ? 0.7 + rng() * 0.8 : 1.0 + rng() * 1.5, !rim);
   }
-  rockCache = out;
-  return out;
+  rockCache = out.filter((r) => !inMountainZone(r.x, r.z, r.scale));
+  return rockCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,8 +357,8 @@ export function deadwoodPlacements(): DeadwoodPlacement[] {
     const pl = at(x, z, rng, 0.9, 1.15, 3);
     out.push({ ...pl, kind: 'log', length: 4.4 * pl.scale, collider: true });
   }
-  deadCache = out;
-  return out;
+  deadCache = out.filter((d) => !inMountainZone(d.x, d.z, 1.5));
+  return deadCache;
 }
 
 export interface RootPlacement extends Placement {
@@ -379,7 +384,7 @@ export function rootPlacements(): RootPlacement[] {
     if (distanceToPath(rx, rz).dist < p.halfWidth + 0.8) continue;
     out.push({ x: rx, y: terrainHeight(rx, rz), z: rz, yaw, scale: Math.max(0.8, Math.min(1.5, t.colliderRadius / 1.8)), variant: Math.floor(rng() * 3), tiltX: 0, tiltZ: 0, from: t.colliderRadius });
   }
-  return out;
+  return out.filter((r) => !inMountainZone(r.x, r.z, 1));
 }
 
 function nearestPathPoint(x: number, z: number): readonly [number, number] {
@@ -412,12 +417,12 @@ export function solids(): Solid[] {
   for (const t of treePlacements()) out.push({ x: t.x, z: t.z, r: t.colliderRadius + 0.15, kind: 'tree' });
   for (const r of rockPlacements()) if (r.collider || r.scale > 0.9) out.push({ x: r.x, z: r.z, r: r.scale * 0.95, kind: 'rock' });
   for (const d of deadwoodPlacements()) if (d.kind === 'log') out.push({ x: d.x, z: d.z, r: d.length * 0.5, kind: 'log' });
-  for (const p of PILLARS) out.push({ x: p.x, z: p.z, r: 0.9, kind: 'pillar' });
+  for (const p of PILLARS) out.push({ x: p.x, z: p.z, r: PILLAR_R + 0.5, kind: 'pillar' });
   out.push({ x: ALTAR[0], z: ALTAR[1], r: 1.5, kind: 'altar' });
   out.push({ x: TEMPLE.x, z: TEMPLE.z, r: TEMPLE.width * 0.52, kind: 'temple' });
-  out.push({ x: ROOT_ARCH.x, z: ROOT_ARCH.z, r: 2.6, kind: 'arch' });
-  out.push({ x: FALLEN_GIANT.x, z: FALLEN_GIANT.z, r: 5.6, kind: 'log' });
-  out.push({ x: SPIRE.x, z: SPIRE.z, r: 2.6, kind: 'temple' });
+  out.push({ x: ROOT_ARCH.x, z: ROOT_ARCH.z, r: 2.6 * ROOT_ARCH.scale, kind: 'arch' });
+  out.push({ x: FALLEN_GIANT.x, z: FALLEN_GIANT.z, r: FALLEN_GIANT.length / 2, kind: 'log' });
+  out.push({ x: SPIRE.x, z: SPIRE.z, r: SPIRE.r + 1.2, kind: 'temple' });
   solidCache = out;
   return out;
 }
@@ -473,7 +478,8 @@ interface PlantRule {
 const RULES: Record<Exclude<PlantKind, 'reed' | 'pads'>, PlantRule> = {
   fern: { target: 80, per: [1, 3], spread: 2.6, scale: [0.9, 1.14], seed: 11, pad: 0.3 },
   treefern: { target: 14, per: [1, 2], spread: 2.0, scale: [0.9, 1.1], seed: 12, pad: 1.0 },
-  broadleaf: { target: 90, per: [2, 4], spread: 2.4, scale: [0.92, 1.12], seed: 22, pad: 0.6 },
+  // heliconia / banana / alocasia: real plants are 2-5 m; the prototypes are 1.6-2.4 m, so they are placed at 1.25-1.5x
+  broadleaf: { target: 90, per: [2, 4], spread: 2.4, scale: [1.25, 1.5], seed: 22, pad: 0.8 },
   shrub: { target: 55, per: [1, 3], spread: 2.0, scale: [0.9, 1.15], seed: 33, pad: 0.6 },
   palm: { target: 40, per: [1, 3], spread: 2.8, scale: [0.9, 1.12], seed: 66, pad: 0.8 },
   cover: { target: 110, per: [1, 3], spread: 2.0, scale: [0.9, 1.15], seed: 44, pad: 0.1 },
@@ -534,7 +540,7 @@ function computePlants(kind: PlantKind): Placement[] {
       out.push(pl);
     }
   }
-  return out;
+  return out.filter((p) => !inMountainZone(p.x, p.z, 0.3));
 }
 
 function reedPlacements(): Placement[] {
@@ -633,6 +639,6 @@ export function lightShafts(): ShaftSpec[] {
     picked.push({ x: c.x, z: c.z, w: c.w, len: c.len, strength: c.strength });
   }
   void SUN_DIR;
-  return picked;
+  return picked.filter((s) => !inMountainZone(s.x, s.z, 3));
 }
 

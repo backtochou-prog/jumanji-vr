@@ -1,3 +1,4 @@
+import { WebGLRenderTarget } from '@iwsdk/core';
 import type { World } from '@iwsdk/core';
 
 /**
@@ -59,7 +60,7 @@ const TIER_KEY = 'jumanji-vr.quality.v1';
 export const lodState = { scale: 1 };
 
 /** Node-name patterns (scene node names) dropped by the 'low' tier. */
-const LOW_HIDES = /^(Light shafts|Ground mist)/;
+const LOW_HIDES = /^(Light shafts|Ground mist|Fall mist)/;
 
 export function loadTier(): QualityTier {
   const q = new URLSearchParams(globalThis.location?.search ?? '').get('quality');
@@ -150,14 +151,73 @@ export function applyTier(world: World, tier: QualityTier, shadows = tier === 'h
  * variants of the programs differ from the desktop ones), so the first seconds in VR are not
  * spent compiling. Uses KHR_parallel_shader_compile when three.js finds it (compileAsync).
  */
-export function warmShaders(world: World): void {
+export function warmShaders(world: World, shadowPass = false): void {
   const r = world.renderer as unknown as { compileAsync?: (s: unknown, c: unknown) => Promise<unknown>; compile?: (s: unknown, c: unknown) => void };
   const t0 = performance.now();
-  const done = () => console.info(`[jumanji] shader warm-up finished in ${(performance.now() - t0).toFixed(0)} ms`);
+  // three.js compiles only VISIBLE objects, and the LOD systems hide most of the mountain while the player is in the jungle (and the
+  // collapse pieces, pebbles and fall variants start hidden): show everything for the compile so no program is first built mid-walk.
+  const hidden: { visible: boolean }[] = [];
+  world.scene.traverse((o) => {
+    if (!o.visible && ((o as { isMesh?: boolean }).isMesh || (o as { isSprite?: boolean }).isSprite || (o as { isPoints?: boolean }).isPoints)) hidden.push(o);
+  });
+  for (const o of hidden) o.visible = true;
+  const restore = () => {
+    for (const o of hidden) o.visible = false;
+  };
+  const done = () => {
+    restore();
+    if (shadowPass) warmShadowPrograms(world);
+    console.info(`[jumanji] shader warm-up finished in ${(performance.now() - t0).toFixed(0)} ms (${world.renderer.info.programs?.length ?? '?'} programs)`);
+  };
   try {
     if (r.compileAsync) void r.compileAsync(world.scene, world.camera).then(done, done);
-    else r.compile?.(world.scene, world.camera);
+    else {
+      r.compile?.(world.scene, world.camera);
+      done();
+    }
   } catch (e) {
+    restore();
     console.warn('[jumanji] shader warm-up failed', e);
+  }
+}
+
+/**
+ * The sun's shadow casters (ruins, altar, relic) get their own depth programs, which three.js builds the first time a caster is inside the
+ * shadow frustum: mid-walk, near the clearing. Build them now instead: one tiny render with a world-sized shadow frustum into a 1x1 target.
+ * Page-ready only (never inside an XR frame).
+ */
+function warmShadowPrograms(world: World): void {
+  try {
+    type ShadowCam = { left: number; right: number; top: number; bottom: number; near: number; far: number; updateProjectionMatrix(): void };
+    const found: { cam: ShadowCam | null } = { cam: null };
+    world.scene.traverse((o) => {
+      const l = o as unknown as { isDirectionalLight?: boolean; castShadow: boolean; shadow: { camera: ShadowCam } };
+      if (!found.cam && l.isDirectionalLight && l.castShadow) found.cam = l.shadow.camera;
+    });
+    const cam = found.cam;
+    if (!cam) return;
+    const saved = { l: cam.left, r: cam.right, t: cam.top, b: cam.bottom, n: cam.near, f: cam.far };
+    cam.left = -140;
+    cam.right = 140;
+    cam.top = 140;
+    cam.bottom = -140;
+    cam.far = Math.max(cam.far, 400);
+    cam.updateProjectionMatrix();
+    const r = world.renderer;
+    const rt = new WebGLRenderTarget(1, 1);
+    const prev = r.getRenderTarget();
+    r.setRenderTarget(rt);
+    r.render(world.scene, world.camera);
+    r.setRenderTarget(prev);
+    rt.dispose();
+    cam.left = saved.l;
+    cam.right = saved.r;
+    cam.top = saved.t;
+    cam.bottom = saved.b;
+    cam.near = saved.n;
+    cam.far = saved.f;
+    cam.updateProjectionMatrix();
+  } catch (e) {
+    console.warn('[jumanji] shadow program warm-up skipped', e);
   }
 }

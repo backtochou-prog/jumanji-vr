@@ -1,10 +1,15 @@
-import { createSystem, LocomotionSystem, VisibilityState, Vector3, VERSION } from '@iwsdk/core';
+import { CylinderGeometry, DepthFormat, DepthTexture, Mesh, MeshBasicMaterial, UnsignedByteType, UnsignedShortType, WebGLRenderTarget, createSystem, LocomotionSystem, VisibilityState, Vector3, VERSION } from '@iwsdk/core';
 import type { World } from '@iwsdk/core';
 import { BUILD_TIMES } from '../assets.js';
 import { governorInfo } from '../systems/quality-governor.js';
 import { loadQuality, qualityState } from '../settings/quality.js';
-import { SPAWN, TEST_POSES, areaAt, terrainHeight } from '../world/layout.js';
-import type { TestId } from '../world/layout.js';
+import { atmosphere } from '../systems/atmosphere-system.js';
+import { lodInfo } from '../systems/chunk-lod-system.js';
+import { MTN_VIEWS, SPAWN, TEST_POSES, areaLabel, terrainHeight } from '../world/layout.js';
+
+/** A repeatable test pose: the three jungle poses or any mountain station (summit, summit-down, descent, cleft, bridge-mid, brink ...). */
+export type TestId = string;
+const poseFor = (id: string): { label: string; x: number; z: number; yawDeg: number; y?: number; pitchDeg?: number } | undefined => (TEST_POSES as Record<string, { label: string; x: number; z: number; yawDeg: number }>)[id] ?? MTN_VIEWS[id];
 import { chunkStats } from '../systems/chunk-lod-system.js';
 import { metrics } from './frame-metrics.js';
 import { measureOverdraw } from './overdraw.js';
@@ -44,6 +49,8 @@ export interface PerfResult {
   governor: { state: string; step: number; lastReason: string; enabledDuringTest: boolean };
   display: { rateHz: number | null; supportedRatesHz: number[]; periodMs: number };
   player: { start: [number, number]; end: [number, number]; driftMeters: number; area: string };
+  /** Distance strategy state during the sample: view openness 0..1, camera far plane, fog density, terrain roots drawn fine / coarse. */
+  view: { open: number; farM: number; fog: number; terrainFineRoots: number; terrainCoarseRoots: number };
   boot: { assetBuildMs: number; assetBuildGroups: Record<string, number>; pageLoadToTestMs: number };
   memory: { geometries: number; textures: number; programs: number; jsHeapMB: number | null };
   environment: { iwsdk: string; userAgent: string; emulated: boolean; xrFeatures: string[]; devicePixelRatio: number };
@@ -57,6 +64,9 @@ export const perfTest = {
   sampleMs: 10000,
   governorOn: false,
   returnToStart: false,
+  /** Remaining ids of a running suite (?test=all). */
+  queue: [] as string[],
+  suiteTotal: 0,
   desktop: false,
   last: null as PerfResult | null,
   /** The governor stays out of the way for the whole test. */
@@ -69,10 +79,18 @@ export const perfTest = {
 const STORE = 'jumanji-vr.perf.results.v1';
 
 /** Teleport the rig to a pose and face it. */
-export function placePlayer(world: World, x: number, z: number, yawDeg: number): void {
-  const p = new Vector3(x, terrainHeight(x, z), z);
+/** The stations of `?test=all`, in the order a visit would take them. */
+export const SUITE = ['entrance', 'trail', 'clearing', 'valley', 'summit-down', 'summit-fall', 'descent', 'cleft', 'bridge-mid', 'brink', 'brink-down'] as const;
+
+export function placePlayer(world: World, x: number, z: number, yawDeg: number, y?: number, pitchDeg?: number): void {
+  const p = new Vector3(x, y ?? terrainHeight(x, z), z);
   world.getSystem(LocomotionSystem)?.setPlayerPosition(p);
   world.player.rotation.set(0, (yawDeg * Math.PI) / 180, 0);
+  // Desktop only: tilt the camera (in a headset the tracked head owns the view and this is ignored).
+  if (pitchDeg !== undefined && world.visibilityState.peek() === VisibilityState.NonImmersive) {
+    world.camera.rotation.order = 'YXZ';
+    world.camera.rotation.set((pitchDeg * Math.PI) / 180, 0, 0);
+  }
 }
 
 export function startPerfTest(world: World, id: TestId, opts: { warmupMs?: number; sampleMs?: number; governor?: boolean; returnToStart?: boolean; desktop?: boolean } = {}): void {
@@ -130,7 +148,10 @@ export class PerfTestSystem extends createSystem({}) {
       copy: copyLastResult,
       start: (id: TestId, o?: object) => startPerfTest(this.world, id, o),
       overdraw: (h?: number) => measureOverdraw(this.world, h),
+      place: (x: number, z: number, yaw: number, y?: number, pitch?: number) => placePlayer(this.world, x, z, yaw, y, pitch),
       world: this.world,
+      /** Three.js classes for tools/flicker-test.mjs (render into a 16-bit depth target, read pixels back). */
+      three: { CylinderGeometry, DepthFormat, DepthTexture, Mesh, MeshBasicMaterial, UnsignedByteType, UnsignedShortType, WebGLRenderTarget },
     };
   }
 
@@ -153,7 +174,17 @@ export class PerfTestSystem extends createSystem({}) {
       this.urlHandled = true;
       const q = new URLSearchParams(globalThis.location?.search ?? '');
       const id = q.get('test') as TestId | null;
-      if (id && TEST_POSES[id]) {
+      if (id === 'all') {
+        // Every environment in one go: jungle entrance, trail, clearing, then the valley, summit, descent, collapse ledge, bridge, waterfall.
+        perfTest.queue = [...SUITE];
+        perfTest.suiteTotal = SUITE.length;
+        startPerfTest(this.world, perfTest.queue.shift()!, {
+          warmupMs: Number(q.get('warmup') ?? 6) * 1000,
+          sampleMs: Number(q.get('sample') ?? 10) * 1000,
+          governor: q.get('governor') === '1',
+          desktop: q.get('desktop') === '1',
+        });
+      } else if (id && poseFor(id)) {
         startPerfTest(this.world, id, {
           warmupMs: Number(q.get('warmup') ?? 8) * 1000,
           sampleMs: Number(q.get('sample') ?? 10) * 1000,
@@ -165,7 +196,7 @@ export class PerfTestSystem extends createSystem({}) {
     if (perfTest.state === 'idle' || perfTest.state === 'done' || !perfTest.id) return;
     const now = performance.now();
     const immersive = this.world.visibilityState.peek() === VisibilityState.Visible;
-    const pose = TEST_POSES[perfTest.id];
+    const pose = poseFor(perfTest.id)!;
 
     if (perfTest.state === 'waiting for VR') {
       if (!immersive) return;
@@ -175,7 +206,7 @@ export class PerfTestSystem extends createSystem({}) {
     if (perfTest.state === 'warm-up') {
       if (!internal.begin) {
         internal.begin = now;
-        placePlayer(this.world, pose.x, pose.z, pose.yawDeg);
+        placePlayer(this.world, pose.x, pose.z, pose.yawDeg, pose.y, pose.pitchDeg);
         metrics.reset();
         perfTest.status = 'Stand still and look ahead.';
       }
@@ -217,7 +248,7 @@ export class PerfTestSystem extends createSystem({}) {
     const result: PerfResult = {
       schema: 1,
       id: perfTest.id!,
-      label: TEST_POSES[perfTest.id!].label,
+      label: poseFor(perfTest.id!)!.label,
       timestamp: new Date().toISOString(),
       session: immersive ? 'immersive-vr' : 'desktop',
       valid: drift <= 1.5 && s.frames >= expected * 0.5,
@@ -236,7 +267,8 @@ export class PerfTestSystem extends createSystem({}) {
       quality: { tier: qualityState.tier, shadows: qualityState.shadows, xrScale: q.xrScale, foveation: q.foveation },
       governor: { state: governorInfo.state, step: governorInfo.step, lastReason: governorInfo.lastReason, enabledDuringTest: perfTest.governorOn },
       display: { rateHz: metrics.displayRate, supportedRatesHz: metrics.supportedRates, periodMs: round(metrics.periodMs) },
-      player: { start: [round(internal.start[0], 1), round(internal.start[1], 1)], end: [round(pos.x, 1), round(pos.z, 1)], driftMeters: round(drift, 2), area: areaAt(pos.x, pos.z) },
+      player: { start: [round(internal.start[0], 1), round(internal.start[1], 1)], end: [round(pos.x, 1), round(pos.z, 1)], driftMeters: round(drift, 2), area: areaLabel(pos.x, pos.y, pos.z) },
+      view: { open: round(atmosphere.open, 2), farM: Math.round(atmosphere.far), fog: round(atmosphere.density, 4), terrainFineRoots: lodInfo.fineRoots, terrainCoarseRoots: lodInfo.coarseRoots },
       boot: { assetBuildMs: Math.round(Object.values(BUILD_TIMES).reduce((a, b) => a + b, 0)), assetBuildGroups: bootGroups, pageLoadToTestMs: Math.round(performance.now() - internal.pageReady) },
       memory: { geometries: info.memory.geometries, textures: info.memory.textures, programs: info.programs?.length ?? 0, jsHeapMB: heap === undefined ? null : round(heap / 1048576, 0) },
       environment: { iwsdk: VERSION, userAgent: navigator.userAgent, emulated, xrFeatures: session && 'enabledFeatures' in session ? Array.from((session as unknown as { enabledFeatures: string[] }).enabledFeatures) : [], devicePixelRatio: window.devicePixelRatio },
@@ -258,6 +290,12 @@ export class PerfTestSystem extends createSystem({}) {
         if (r.ok) perfTest.status += ' Saved to perf-results/ on the PC.';
       })
       .catch(() => undefined);
+    // A suite moves straight on to the next station (same warm-up / sample / governor settings).
+    const next = perfTest.queue.shift();
+    if (next) {
+      startPerfTest(w, next, { warmupMs: perfTest.warmupMs, sampleMs: perfTest.sampleMs, governor: perfTest.governorOn, desktop: perfTest.desktop, returnToStart: perfTest.returnToStart });
+      return;
+    }
     if (perfTest.returnToStart) placePlayer(w, SPAWN[0], SPAWN[1], 0);
   }
 }

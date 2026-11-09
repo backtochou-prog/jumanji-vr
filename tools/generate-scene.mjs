@@ -22,6 +22,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as L from '../src/world/layout.ts';
 import * as P from '../src/world/placements.ts';
+import * as M from '../src/world/mountain.ts';
+import * as MP from '../src/world/mountain-placements.ts';
 import { FOG_COLOR, SUN_DIR } from '../src/world/palette.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +87,7 @@ const groundY = (x, z) => L.terrainHeight(x, z);
 
 // ---- ground, water, backdrop ---------------------------------------------------
 nodes.push({ id: 'terrain', name: 'Terrain + Trail', framingRole: 'support', content: { type: 'asset', asset: 'jungle-terrain', receiveShadow: true }, components: { LocomotionEnvironment: {} } });
+nodes.push({ id: 'terrain-far', name: 'Terrain LOD (coarse mountain)', framingRole: 'support', content: { type: 'asset', asset: 'terrain-far' } });
 nodes.push({ id: 'world-colliders', name: 'Invisible colliders', framingRole: 'support', content: { type: 'asset', asset: 'world-colliders' }, components: { LocomotionEnvironment: {} } });
 nodes.push({ id: 'water', name: 'Pool, stream and puddles', framingRole: 'support', content: { type: 'asset', asset: 'water' }, components: { ScrollTexture: { speedU: 0.01, speedV: -0.05 } } });
 nodes.push({
@@ -103,6 +106,16 @@ nodes.push({ id: 'cliff', name: 'Distant cliff', framingRole: 'support', content
 nodes.push({ id: 'waterfall', name: 'Distant waterfall', content: { type: 'asset', asset: 'waterfall' }, transform: cliffT, components: { ScrollTexture: { speedU: 0, speedV: -0.55 } } });
 for (let i = 0; i < 3; i++) nodes.push({ id: `ridge-${i}`, name: `Background ridge ${i}`, framingRole: 'support', content: { type: 'asset', asset: `ridge-${i}` } });
 
+// ---- mountain expedition ----------------------------------------------------------------------------------
+nodes.push({ id: 'far-ranges', name: 'Far ranges', framingRole: 'support', content: { type: 'asset', asset: 'far-ranges' } });
+nodes.push({ id: 'mountain-water', name: 'Gorge river, plunge pool, valley river', framingRole: 'support', content: { type: 'asset', asset: 'mountain-water' }, components: { ScrollTexture: { speedU: 0, speedV: -0.06 } } });
+nodes.push({ id: 'giant-fall', name: 'Giant waterfall', content: { type: 'asset', asset: 'giant-fall' }, components: { ScrollTexture: { speedU: 0, speedV: -0.7 } } });
+nodes.push({ id: 'fall-mist', name: 'Fall mist', content: { type: 'asset', asset: 'fall-mist' } });
+nodes.push({ id: 'rope-bridge', name: 'Rope bridge', content: { type: 'asset', asset: 'rope-bridge' }, transform: { position: [M.BRIDGE.ax, M.BRIDGE.y, M.BRIDGE.az] } });
+nodes.push({ id: 'bridge-colliders', name: 'Bridge colliders', framingRole: 'support', content: { type: 'asset', asset: 'bridge-colliders' }, transform: { position: [M.BRIDGE.ax, M.BRIDGE.y, M.BRIDGE.az] }, components: { LocomotionEnvironment: { type: 'kinematic' } } });
+nodes.push({ id: 'collapse-shelf', name: 'Collapse shelf', content: { type: 'asset', asset: 'collapse-shelf' } });
+nodes.push({ id: 'shelf-collider', name: 'Shelf collider', framingRole: 'support', content: { type: 'asset', asset: 'shelf-collider' }, components: { LocomotionEnvironment: { type: 'kinematic' } } });
+
 // ---- landmarks ----------------------------------------------------------------
 nodes.push({ id: 'entrance-canopy', name: 'Entrance limb + lianas', content: { type: 'asset', asset: 'entrance-canopy' } });
 nodes.push({
@@ -115,11 +128,11 @@ nodes.push({
   id: 'fallen-giant',
   name: 'Fallen giant (landmark)',
   content: { type: 'asset', asset: 'log-giant' },
-  transform: { position: [L.FALLEN_GIANT.x, r(groundY(L.FALLEN_GIANT.x, L.FALLEN_GIANT.z) + 0.55), L.FALLEN_GIANT.z], rotationDeg: [0, deg(L.FALLEN_GIANT.yaw), 0] },
+  transform: { position: [L.FALLEN_GIANT.x, r(groundY(L.FALLEN_GIANT.x, L.FALLEN_GIANT.z) + 0.55 * (L.FALLEN_GIANT.radius / 0.85)), L.FALLEN_GIANT.z], rotationDeg: [0, deg(L.FALLEN_GIANT.yaw), 0] },
 });
 
 // ---- trees ---------------------------------------------------------------------
-const trees = P.treePlacements();
+const trees = [...P.treePlacements(), ...MP.mountainTrees()];
 // Near trees exist as a detailed class (shown within 46 m) AND a cheap class (shown beyond 30 m);
 // the far wall exists only as the cheap, always-visible class.
 scatter('trees-hi', (p) => `tree-${p.kind}-${p.variant % P.TREE_VARIANTS[p.kind]}`, trees.filter((t) => t.lod === 'hi'));
@@ -127,17 +140,25 @@ scatter('trees-lo', (p) => `tree-${p.kind}-lo`, trees.filter((t) => t.lod === 'h
 scatter('trees-far', (p) => `tree-${p.kind}-lo`, trees.filter((t) => t.lod === 'lo'));
 
 // ---- understory, ground layer ----------------------------------------------------
-scatter('plants', (p) => `fern-cluster-${p.variant % 3}`, P.plantPlacements('fern'));
+const MTN_KINDS = new Set(['fern', 'treefern', 'broadleaf', 'shrub', 'palm', 'cover', 'flowers', 'moss', 'litter']);
+const plantsOf = (kind) => [...P.plantPlacements(kind), ...(MTN_KINDS.has(kind) ? MP.mountainPlants(kind) : [])];
+scatter('plants', (p) => `fern-cluster-${p.variant % 3}`, plantsOf('fern'));
 // Ground cover is composed into 4 patch assets: meadow (clearing), grass+clover, woodland floor, mossy floor.
 const patchId = { flowers: () => 'patch-0', cover: (p) => `patch-${1 + (p.variant % 2) * 1}`, litter: () => 'patch-2', moss: () => 'patch-3' };
-for (const kind of ['flowers', 'cover', 'litter', 'moss']) scatter('ground', patchId[kind], P.plantPlacements(kind));
-for (const kind of ['treefern', 'broadleaf', 'shrub', 'palm', 'reed', 'pads']) scatter('plants', (p) => `${kind}-${p.variant % P.PLANT_VARIANTS[kind]}`, P.plantPlacements(kind));
+for (const kind of ['flowers', 'cover', 'litter', 'moss']) scatter('ground', patchId[kind], plantsOf(kind));
+for (const kind of ['treefern', 'broadleaf', 'shrub', 'palm', 'reed', 'pads']) scatter('plants', (p) => `${kind}-${p.variant % P.PLANT_VARIANTS[kind]}`, plantsOf(kind));
+scatter('plants', (p) => `vine-${p.variant % 3}`, MP.mountainVines());
 
 // ---- rocks, deadwood, roots ----------------------------------------------------------
 const ROCKS = { boulder: 2, slab: 1, standing: 1, cobble: 2 };
-scatter('rocks', (p) => `rock-${p.kind}-${p.variant % ROCKS[p.kind]}`, P.rockPlacements());
-scatter('deadwood', (p) => `${p.kind}-${p.variant % 2}`, P.deadwoodPlacements());
-scatter('deadwood', (p) => `roots-${p.variant % 2}`, P.rootPlacements());
+const allRocks = [...P.rockPlacements(), ...MP.mountainRocks()];
+const allDead = [...P.deadwoodPlacements(), ...MP.mountainDeadwood()];
+scatter('rocks', (p) => `rock-${p.kind}-${p.variant % ROCKS[p.kind]}`, allRocks);
+scatter('deadwood', (p) => `${p.kind}-${p.variant % 2}`, allDead);
+scatter('deadwood', (p) => `roots-${p.variant % 2}`, [...P.rootPlacements(), ...MP.mountainRoots()]);
+// Mountain far field: tree crowns seen from above (valley + ridge) and the rock towers (64 m cells).
+scatter('canopy', (p) => `canopy-${p.variant % 3}`, MP.canopyClumps());
+scatter('crags', (p) => `pinnacle-${p.variant % 3}`, MP.cragPlacements());
 
 // ---- chunk nodes: one node per (class, cell) that has instances -----------------------------------------------
 const CHUNK = L.CHUNK;
@@ -147,7 +168,7 @@ const chunkList = [];
   for (const [cls, byAsset] of Object.entries(instances)) {
     for (const flat of Object.values(byAsset)) {
       for (let i = 0; i < flat.length; i += 7) {
-        const [ix, iz] = L.chunkIndex(flat[i], flat[i + 2]);
+        const [ix, iz] = L.chunkIndex(flat[i], flat[i + 2], L.CELL_SIZE[cls]);
         const id = `veg-${cls}-${ix}-${iz}`;
         if (seen.has(id)) continue;
         seen.add(id);
@@ -161,9 +182,9 @@ const chunkList = [];
 void CHUNK;
 
 // ---- the ancient clearing ---------------------------------------------------------------
-const tY = groundY(L.TEMPLE.x, L.TEMPLE.z);
-nodes.push({ id: 'temple', name: 'Overgrown temple', content: { type: 'asset', asset: 'temple', castShadow: true, receiveShadow: true }, transform: { position: [L.TEMPLE.x, r(tY - 0.05), L.TEMPLE.z] } });
-nodes.push({ id: 'temple-growth', name: 'Temple overgrowth', content: { type: 'asset', asset: 'temple-growth' }, transform: { position: [L.TEMPLE.x, r(tY - 0.05), L.TEMPLE.z] } });
+const tY = L.TEMPLE_BASE;
+nodes.push({ id: 'temple', name: 'Overgrown temple', content: { type: 'asset', asset: 'temple', castShadow: true, receiveShadow: true }, transform: { position: [L.TEMPLE.x, r(tY), L.TEMPLE.z] } });
+nodes.push({ id: 'temple-growth', name: 'Temple overgrowth', content: { type: 'asset', asset: 'temple-growth' }, transform: { position: [L.TEMPLE.x, r(tY), L.TEMPLE.z] } });
 const sY = groundY(L.SPIRE.x, L.SPIRE.z);
 nodes.push({ id: 'spire', name: 'Ruined spire (landmark)', content: { type: 'asset', asset: 'spire', castShadow: true }, transform: { position: [L.SPIRE.x, r(sY - 0.1), L.SPIRE.z] } });
 nodes.push({ id: 'spire-growth', name: 'Spire overgrowth', content: { type: 'asset', asset: 'spire-growth' }, transform: { position: [L.SPIRE.x, r(sY - 0.1), L.SPIRE.z] } });
@@ -206,7 +227,7 @@ nodes.push({
       intensity: 3.1,
       castShadow: true,
       shadowMapSize: '1024',
-      shadowCameraSize: 9,
+      shadowCameraSize: 8, // 8 m window / 1024 px = 7.8 mm texels: a 1 m world step is a whole 128 texels (ShadowFollowSystem snaps to texels)
       shadowCameraNear: 2,
       shadowCameraFar: 60,
       shadowBias: -0.0006,
@@ -232,14 +253,38 @@ const views = [
   eye(-4.2, -57.5, 0.0, 1.0, -61.5, 'v-altar', 60),
   { id: 'v-top', role: 'diagnostic', projection: 'orthographic', position: [0, 90, -34], target: [0, 0, -34], height: 130 },
 ];
+// Mountain expedition views (standing eye height on the route; look targets follow the route or the valley).
+{
+  const R = L.MTN;
+  const atS = (s) => R.samples.reduce((b, q) => (Math.abs(q.s - s) < Math.abs(b.s - s) ? q : b));
+  const along = (s, ahead = 10, up = 0.4) => { const a = atS(s); const b = atS(s + ahead); return [a.x, r(a.y + 1.65), a.z, b.x, r(b.y + 1.65 + up), b.z]; };
+  const view = (id, [x, y, z, tx, ty, tz], fov = 78) => views.push({ id, role: 'diagnostic', projection: 'perspective', position: [r(x), r(y), r(z)], target: [r(tx), r(ty), r(tz)], fov });
+  view('m-climb', along(95, 12, 0.3));
+  view('m-climb-high', along(165, 14, 0.2));
+  const [dx, dz] = M.SUMMIT_DIR;
+  const lip = [M.PLATFORM.x + dx * (M.PLATFORM.r - 1.4), M.PLATFORM.z + dz * (M.PLATFORM.r - 1.4)];
+  const ly = M.PLATFORM.y + 1.65;
+  view('m-summit', [lip[0], ly, lip[1], lip[0] + dx * 60, ly - 6, lip[1] + dz * 60 - 10], 84);
+  view('m-summit-down', [lip[0], ly, lip[1], lip[0] + dx * 8, ly - 40, lip[1] + dz * 8], 84);
+  view('m-summit-fall', [lip[0], ly, lip[1], 202, -22, -170], 70);
+  view('m-descent', along(225, 14, -0.3));
+  view('m-ledge', along(262, 16, -0.2));
+  view('m-cleft', along(R.cleft.s0 - 8, 14, -0.1));
+  view('m-bridge-w', [M.BRIDGE.ax - 2.5, M.BRIDGE.y + 1.65, M.BRIDGE.az, M.BRIDGE.bx, M.BRIDGE.y + 0.6, M.BRIDGE.bz], 80);
+  view('m-bridge-mid', [(M.BRIDGE.ax + M.BRIDGE.bx) / 2, M.BRIDGE.y - M.BRIDGE.sag + 1.65, M.BRIDGE.az, (M.BRIDGE.ax + M.BRIDGE.bx) / 2 + 1, M.BRIDGE.y - 14, M.BRIDGE.az + 8], 84);
+  view('m-bridge-cascade', [M.BRIDGE.ax + 9, M.BRIDGE.y - M.BRIDGE.sag + 1.65, M.BRIDGE.az, 187, 20, -215], 80);
+  view('m-brink', [M.TERRACE.x - 1.6, M.TERRACE.y + 1.65, M.TERRACE.z + 1.6, 190, M.TERRACE.y - 18, -178], 84);
+  views.push({ id: 'm-top', role: 'diagnostic', projection: 'orthographic', position: [200, 160, -150], target: [200, 0, -150], height: 340 });
+}
 
 // ---- baked runtime data: collision + AO + shaft lists, so the runtime never re-runs the placement search ----
 const f = (n) => r(n, 2);
 const baked = {
-  occluders: P.groundOccluders().map((o) => [f(o.x), f(o.z), f(o.r)]),
-  trees: trees.map((t) => [f(t.x), f(t.y), f(t.z), f(t.colliderRadius)]),
-  rocks: P.rockPlacements().filter((k) => k.collider).map((k) => [f(k.x), f(k.y), f(k.z), f(k.scale), r(k.yaw), { boulder: 0, slab: 1, standing: 2, cobble: 3 }[k.kind]]),
-  logs: P.deadwoodPlacements().filter((d) => d.collider).map((d) => [f(d.x), f(d.y), f(d.z), f(0.34 * d.scale), f(d.length), r(d.yaw)]),
+  occluders: [...P.groundOccluders(), ...MP.mountainOccluders()].map((o) => [f(o.x), f(o.z), f(o.r)]),
+  // Trunk colliders: the jungle's, plus the mountain trees that stand beside the route (valley emergents never need one).
+  trees: trees.filter((t) => t.x < 30 || M.routeNear(L.MTN, t.x, t.z).dist < 20).map((t) => [f(t.x), f(t.y), f(t.z), f(t.colliderRadius)]),
+  rocks: allRocks.filter((k) => k.collider).map((k) => [f(k.x), f(k.y), f(k.z), f(k.scale), r(k.yaw), { boulder: 0, slab: 1, standing: 2, cobble: 3 }[k.kind]]),
+  logs: allDead.filter((d) => d.collider).map((d) => [f(d.x), f(d.y), f(d.z), f(0.34 * d.scale), f(d.length), r(d.yaw)]),
   shafts: shafts.map((s) => [f(s.x), f(s.z), f(s.w), f(s.len), f(s.strength)]),
 };
 writeFileSync(
@@ -278,7 +323,7 @@ const scene = {
     exposure: 1.05,
     shadows: true,
     shadowMapType: 'pcf',
-    fog: { type: 'exponential', color: FOG_COLOR, density: 0.0125 },
+    fog: { type: 'exponential', color: FOG_COLOR, density: 0.0095 },
   },
   player: { transform: { position: [L.SPAWN[0], r(groundY(...L.SPAWN)), L.SPAWN[1]], rotationDeg: [0, 0, 0] } },
   resources: { prefabs },
@@ -300,6 +345,6 @@ const fixture = {
 };
 writeFileSync(FIXTURE, JSON.stringify(fixture, null, 1) + '\n');
 // Collision-only route fixture: player at the real spawn; terrain + the full collision proxy, nothing else.
-const routeKeep = new Set(['terrain', 'world-colliders', 'sun', 'canopy-fill']);
+const routeKeep = new Set(['terrain', 'world-colliders', 'bridge-colliders', 'shelf-collider', 'sun', 'canopy-fill']);
 writeFileSync(resolve(here, '../public/scenes/test-route.iwsdk.scene.json'), JSON.stringify({ ...scene, resources: { prefabs: [] }, nodes: nodes.filter((n) => routeKeep.has(n.id)) }, null, 1) + '\n');
 console.log(`wrote ${OUT}: ${nodes.length} nodes (${chunkList.length} vegetation chunks), ${trees.length} trees`);

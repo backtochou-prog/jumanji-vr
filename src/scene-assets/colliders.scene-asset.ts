@@ -11,7 +11,7 @@
  * + margin of the trail centre-line (tools/validate-scene.mjs proves it).
  */
 import { BoxGeometry, CylinderGeometry, IcosahedronGeometry, Matrix4, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from '@iwsdk/core';
-import { ALTAR, ALTAR_TOP_Y, FALLEN_GIANT, PILLARS, ROOT_ARCH, SPIRE, TEMPLE, WALK_LIMIT, terrainHeight } from '../world/layout.js';
+import { ALTAR, ALTAR_TOP_Y, FALLEN_GIANT, MTN_GUARDS, PILLARS, PILLAR_R, TEMPLE_BASE, ROOT_ARCH, SPIRE, TEMPLE, WALK_LIMIT, ringOpening, terrainHeight } from '../world/layout.js';
 import { BAKED } from '../world/baked.js';
 import { mat, mergeParts } from './lib/geo.js';
 import type { Part } from './lib/geo.js';
@@ -28,19 +28,19 @@ export function createColliders(): Mesh {
   const lying = (x: number, y: number, z: number, r: number, len: number, yaw: number) => parts.push({ geo: new CylinderGeometry(r, r, len, 8), m: mat(x, y, z, 0, yaw, Math.PI / 2), color: white });
 
   // Boundary wall: a closed ring of overlapping boxes around the walkable ellipse.
-  const N = 84;
+  const N = 330;
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2;
     const x = WALK_LIMIT.cx + Math.cos(a) * WALK_LIMIT.rx;
     const z = WALK_LIMIT.cz + Math.sin(a) * WALK_LIMIT.rz;
     const tx = -Math.sin(a) * WALK_LIMIT.rx;
     const tz = Math.cos(a) * WALK_LIMIT.rz;
-    const len = (Math.hypot(tx, tz) * (Math.PI * 2)) / N + 0.6;
+    const len = (Math.hypot(tx, tz) * (Math.PI * 2)) / N + 0.4;
+    if (ringOpening(x, z)) continue; // the mountain route leaves the jungle here
     box(x, terrainHeight(x, z) + 4, z, len, 12, 1.4, Math.atan2(-tz, tx));
   }
   // Tree trunks.
   for (const [x, y, z, r] of BAKED.trees) {
-    if (Math.hypot(x - WALK_LIMIT.cx, z - WALK_LIMIT.cz) > 90) continue;
     cyl(x, y + 5.5, z, r, 14);
   }
   // Big rocks.
@@ -52,23 +52,27 @@ export function createColliders(): Mesh {
   for (const [x, y, z, r, len, yaw] of BAKED.logs) lying(x, y + 0.2, z, r, len, yaw);
   {
     const gy = terrainHeight(FALLEN_GIANT.x, FALLEN_GIANT.z);
-    lying(FALLEN_GIANT.x, gy + 0.55, FALLEN_GIANT.z, 0.85, FALLEN_GIANT.length, FALLEN_GIANT.yaw);
+    lying(FALLEN_GIANT.x, gy + 0.55 * (FALLEN_GIANT.radius / 0.85), FALLEN_GIANT.z, FALLEN_GIANT.radius, FALLEN_GIANT.length, FALLEN_GIANT.yaw);
   }
   // Root arch: the far leg only (the trail passes under the bridge; the trunk is a tree collider).
   {
     const c = Math.cos(ROOT_ARCH.yaw);
     const s = Math.sin(ROOT_ARCH.yaw);
-    const lx = -2.5;
-    cyl(ROOT_ARCH.x + lx * c, terrainHeight(ROOT_ARCH.x + lx * c, ROOT_ARCH.z - lx * s) + 1.2, ROOT_ARCH.z - lx * s, 0.45, 2.6);
+    const lx = ROOT_ARCH.legX;
+    cyl(ROOT_ARCH.x + lx * c, terrainHeight(ROOT_ARCH.x + lx * c, ROOT_ARCH.z - lx * s) + 1.2 * ROOT_ARCH.scale, ROOT_ARCH.z - lx * s, 0.45 * ROOT_ARCH.scale, 2.6 * ROOT_ARCH.scale);
   }
   // Clearing: temple solids (platform, wall sections, columns), spire, pillars, altar.
   {
-    const gy = terrainHeight(TEMPLE.x, TEMPLE.z);
+    const gy = TEMPLE_BASE;
     for (const b of templeSolids()) box(TEMPLE.x + b.x, gy + b.y, TEMPLE.z + b.z, b.w, b.h, b.d);
-    cyl(SPIRE.x, terrainHeight(SPIRE.x, SPIRE.z) + 6, SPIRE.z, 2.5, 12, 10);
+    cyl(SPIRE.x, terrainHeight(SPIRE.x, SPIRE.z) + 15, SPIRE.z, SPIRE.r * 0.93, 30, 10);
   }
-  for (const p of PILLARS) cyl(p.x, terrainHeight(p.x, p.z) + p.h / 2, p.z, 0.6, p.h);
+  for (const p of PILLARS) cyl(p.x, terrainHeight(p.x, p.z) + p.h / 2, p.z, PILLAR_R, p.h);
   box(ALTAR[0], terrainHeight(ALTAR[0], ALTAR[1]) + (ALTAR_TOP_Y + 0.2) / 2 - 0.1, ALTAR[1], 1.9, ALTAR_TOP_Y + 0.2, 1.9);
+
+  // Mountain route: guard walls along both sides of the corridor and round the summit platform and the brink terrace,
+  // so the player can lean over any drop but never step off it (validated by tools/validate-scene.mjs).
+  for (const w of MTN_GUARDS) parts.push({ geo: new BoxGeometry(w.length, w.y1 - w.y0, 0.5), m: new Matrix4().compose(new Vector3(w.x, (w.y0 + w.y1) / 2, w.z), new Quaternion().setFromAxisAngle(yAxis, w.yaw), new Vector3(1, 1, 1)), color: white });
 
   const mesh = new Mesh(mergeParts(parts), new MeshBasicMaterial({ visible: false }));
   mesh.visible = false;

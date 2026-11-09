@@ -20,60 +20,10 @@ export type Vec2 = readonly [number, number];
 // Noise and helpers
 // ---------------------------------------------------------------------------
 
-/** Small deterministic PRNG (mulberry32). */
-export function makeRandom(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function hash2(ix: number, iz: number, seed: number): number {
-  let h = (ix * 374761393 + iz * 668265263 + seed * 2147483647) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-/** Smooth value noise in [0,1]. */
-export function valueNoise(x: number, z: number, seed = 1): number {
-  const ix = Math.floor(x);
-  const iz = Math.floor(z);
-  const fx = x - ix;
-  const fz = z - iz;
-  const u = fx * fx * (3 - 2 * fx);
-  const v = fz * fz * (3 - 2 * fz);
-  const a = hash2(ix, iz, seed);
-  const b = hash2(ix + 1, iz, seed);
-  const c = hash2(ix, iz + 1, seed);
-  const d = hash2(ix + 1, iz + 1, seed);
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-}
-
-export function fbm(x: number, z: number, seed = 1, octaves = 4): number {
-  let sum = 0;
-  let amp = 0.5;
-  let freq = 1;
-  let norm = 0;
-  for (let i = 0; i < octaves; i++) {
-    sum += valueNoise(x * freq, z * freq, seed + i * 17) * amp;
-    norm += amp;
-    amp *= 0.5;
-    freq *= 2;
-  }
-  return sum / norm;
-}
-
-export const smoothstep = (a: number, b: number, x: number): number => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
-
-export const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
+import { PLATFORM, TERRACE, VALLEY, buildRoute, corridorWalls, gradeRoute, landform, mountainWeight, ringWalls, routeNear, viewpoints } from './mountain.ts';
+import type { GuardWall } from './mountain.ts';
+import { clamp01, fbm, makeRandom, nearestOnPolyline, sampleSpline, smoothstep, valueNoise } from './math.ts';
+export { clamp01, fbm, makeRandom, smoothstep, valueNoise };
 
 // ---------------------------------------------------------------------------
 // Key places (authored; change here, then `npm run scene:generate`)
@@ -112,11 +62,23 @@ export const ALTAR_TOP_Y = 0.94;
 /** Ancient clearing: open ground around the overgrown temple. */
 export const CLEARING = { x: 0, z: -63, r: 12 } as const;
 
-/** Overgrown temple structure, built in ruins/temple assets (origin on the ground). */
-export const TEMPLE = { x: 0, z: -69.5, width: 15, depth: 9 } as const;
+/**
+ * SCALE CONVENTION. One world unit is one metre everywhere (no node or root carries a scale; every asset is baked in metres).
+ * The structures below are DESIGNED at a small reference size and BAKED at these factors, so each keeps its authored proportions:
+ *   temple 1.9   (design 15 x 9 m footprint, 8 m tall  ->  28.5 x 17.1 m, ~15 m tall, doorway ~10 m, columns 4-7 m)
+ *   spire  2.08  (design 24 m  ->  50 m, ~11 m wide at the base: taller than every tree but the emergents)
+ *   pillar 2.1   (design 2.2-3.8 m  ->  4.6-8 m, 2.5 m thick)
+ *   root arch 1.7, fallen giant 1.4, backdrop cliff and its fall 1.8
+ * Player: eye height 1.65 m, capsule radius 0.5 m. Trees follow TREE_SPECS (giants 60-75 m, canopy 36-42 m, sub-canopy 28-31 m).
+ * The altar stays HUMAN-SIZED (top 0.94 m) because the Heartstone on it must be graspable.
+ */
+export const SCALE = { temple: 1.9, spire: 50 / 24, pillar: 2.1, rootArch: 1.7, fallenGiant: 1.4, cliff: 1.8 } as const;
 
-/** Tall ruined spire: destination landmark visible above the canopy. */
-export const SPIRE = { x: -9.5, z: -67, h: 24 } as const;
+/** Overgrown temple (origin on the ground, front faces +Z toward the altar). Front edge stays at z = -65.45, where it always was. */
+export const TEMPLE = { x: 0, z: -74, width: 15 * SCALE.temple, depth: 9 * SCALE.temple } as const;
+
+/** Tall ruined spire: destination landmark, now rising above the canopy. `r` = its base radius. */
+export const SPIRE = { x: -19, z: -57, h: 50, r: 2.7 * SCALE.spire } as const;
 
 /** Jungle entrance: two colossal trees either side of the trail. */
 export const ENTRANCE_TREES: Vec2[] = [
@@ -145,14 +107,23 @@ export const STREAM_POINTS: Vec2[] = [
 export const FORD = { x: -1.2, z: -22.9 } as const;
 
 /** Landmark: giant root arch over the trail, and a fallen giant beside it. */
-export const ROOT_ARCH = { x: 4.5, z: -34.0, yaw: 0.1 } as const;
-export const FALLEN_GIANT = { x: -6.6, z: -31.5, yaw: 1.28, length: 11 } as const;
+export const ROOT_ARCH = { x: 4.5, z: -34.0, yaw: 0.1, scale: SCALE.rootArch, trunk: 4.8 * SCALE.rootArch, legX: -2.5 * SCALE.rootArch } as const;
+export const FALLEN_GIANT = { x: -6.6, z: -31.5, yaw: 1.28, length: 11 * SCALE.fallenGiant, radius: 0.85 * SCALE.fallenGiant } as const;
 
 /** Occasional muddy hollows on the trail (x, z, radius). */
 export const MUD_PATCHES: { x: number; z: number; r: number }[] = [
   { x: -3.0, z: -16, r: 1.9 },
   { x: 3.4, z: -29.5, r: 1.7 },
   { x: -0.7, z: -46, r: 1.8 },
+];
+
+/**
+ * Where the mountain route's two colossal gate giants stand (src/world/mountain-placements.ts, route s=30; the validator fails if they move).
+ * The jungle's random trees keep out of these discs so the two independently generated tree sets never interpenetrate.
+ */
+export const MOUNTAIN_GATE_TREES: { x: number; z: number; r: number }[] = [
+  { x: 38.7, z: -45.0, r: 6.9 },
+  { x: 23.6, z: -56.3, r: 6.1 },
 ];
 
 /** Distant cliff with the waterfall: the backdrop of the ancient clearing. */
@@ -162,16 +133,17 @@ export const CLIFF = { x: 5, z: -96 } as const;
 export const WALK_LIMIT = { cx: 0, cz: -33, rx: 27, rz: 52 };
 
 /** Ruined pillars of the ancient clearing (height m, broken = snapped top). */
+export const PILLAR_R = 0.6 * SCALE.pillar;
 export const PILLARS: { x: number; z: number; h: number; broken: boolean; seed: number }[] = [
-  { x: -5.2, z: -58.6, h: 3.8, broken: false, seed: 3 },
-  { x: 5.4, z: -58.2, h: 2.2, broken: true, seed: 4 },
-  { x: -7.4, z: -64.4, h: 2.6, broken: true, seed: 5 },
+  { x: -7.0, z: -59.0, h: 3.8 * SCALE.pillar, broken: false, seed: 3 },
+  { x: 7.4, z: -58.6, h: 2.2 * SCALE.pillar, broken: true, seed: 4 },
+  { x: -12.5, z: -62.4, h: 2.6 * SCALE.pillar, broken: true, seed: 5 },
 ];
 
 /** View corridors kept free of tall trees: [from, to, half-width]. */
 export const CORRIDORS: { a: Vec2; b: Vec2; w: number }[] = [
   { a: [0, -50], b: [CLIFF.x, CLIFF.z + 6], w: 5.5 }, // clearing -> waterfall
-  { a: [-1, -44], b: [SPIRE.x, SPIRE.z], w: 4.2 }, // trail end -> spire
+  { a: [-1, -44], b: [SPIRE.x, SPIRE.z], w: 6.5 }, // trail end -> spire
 ];
 
 // ---------------------------------------------------------------------------
@@ -199,28 +171,6 @@ export function areaWeights(x: number, z: number): { entrance: number; trail: nu
 // Path and stream geometry
 // ---------------------------------------------------------------------------
 
-function catmull(p0: number, p1: number, p2: number, p3: number, t: number) {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
-}
-
-function sampleSpline(pts: Vec2[], steps: number): Vec2[] {
-  const out: Vec2[] = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)];
-    const p1 = pts[i];
-    const p2 = pts[i + 1];
-    const p3 = pts[Math.min(pts.length - 1, i + 2)];
-    for (let s = 0; s < steps; s++) {
-      const t = s / steps;
-      out.push([catmull(p0[0], p1[0], p2[0], p3[0], t), catmull(p0[1], p1[1], p2[1], p3[1], t)]);
-    }
-  }
-  out.push(pts[pts.length - 1]);
-  return out;
-}
-
 /** Dense polyline sampled from PATH_POINTS (Catmull-Rom). */
 export const PATH_SAMPLES: Vec2[] = sampleSpline(PATH_POINTS, 12);
 export const STREAM_SAMPLES: Vec2[] = sampleSpline(STREAM_POINTS, 8);
@@ -230,26 +180,6 @@ export function pathHalfWidth(index: number): number {
   const t = index / (PATH_SAMPLES.length - 1);
   const wide = 0.32 * (1 - smoothstep(0.0, 0.12, t)) + 0.5 * smoothstep(0.86, 1.0, t);
   return 0.95 + 0.13 * Math.sin(index * 0.21 + 1.3) + wide;
-}
-
-function nearestOnPolyline(pts: Vec2[], x: number, z: number): { dist: number; index: number } {
-  let best = Infinity;
-  let bi = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [ax, az] = pts[i];
-    const [bx, bz] = pts[i + 1];
-    const dx = bx - ax;
-    const dz = bz - az;
-    const l2 = dx * dx + dz * dz || 1;
-    let u = ((x - ax) * dx + (z - az) * dz) / l2;
-    u = Math.min(1, Math.max(0, u));
-    const d = Math.hypot(x - (ax + dx * u), z - (az + dz * u));
-    if (d < best) {
-      best = d;
-      bi = i + u;
-    }
-  }
-  return { dist: best, index: bi };
 }
 
 /** Exact distance to the trail (slow: ~200 segments). Use `distanceToPath` in hot loops. */
@@ -294,6 +224,8 @@ function buildField(): void {
 
 /** Fast (bilinear on a 2 m grid, ~0.2 m accuracy near the trail edge) distance to the trail, with the local half-width and path parameter. */
 export function distanceToPath(x: number, z: number): { dist: number; halfWidth: number; t: number } {
+  // The trail lies within x in [-4, 5]: beyond 38 m east/west (and far north/south) nothing depends on the exact value.
+  if (x > 38 || x < -42 || z > 52 || z < -100) return { dist: Math.max(34, Math.abs(x) - 5, z > 0 ? z - 20 : -z - 60), halfWidth: 1, t: z > 0 ? 0 : 1 };
   const fx = (x - FIELD.x0) / FIELD.cell;
   const fz = (z - FIELD.z0) / FIELD.cell;
   if (fx < 0 || fz < 0 || fx >= FIELD.nx - 1 || fz >= FIELD.nz - 1) return distanceToPathExact(x, z);
@@ -395,7 +327,7 @@ POOL.waterY = (() => {
  * ellipse, where vegetation hides it. Order: macro relief -> trail grading ->
  * stream channel -> pool basin -> mud hollows -> outer hills.
  */
-export function terrainHeight(x: number, z: number): number {
+function jungleHeight(x: number, z: number): number {
   let h = baseHeight(x, z);
 
   // Trail: blend toward a smoothed profile, slightly sunken like a worn path.
@@ -431,6 +363,95 @@ export function terrainHeight(x: number, z: number): number {
   const ring = Math.hypot((x - WALK_LIMIT.cx) / WALK_LIMIT.rx, (z - WALK_LIMIT.cz) / WALK_LIMIT.rz);
   h += smoothstep(0.98, 1.7, ring) * 6.5 * (0.55 + fbm(x * 0.06, z * 0.06, 5, 2));
   return h;
+}
+
+/** Ground height WITHOUT the mountain route grading (jungle hills blended into the mountain landform). */
+function blendedBase(x: number, z: number): number {
+  const w = mountainWeight(x, z);
+  if (w >= 1) return landform(x, z);
+  const j = jungleHeight(x, z);
+  return w > 0 ? j + (landform(x, z) - j) * w : j;
+}
+
+/** The mountain expedition route (climb, summit, descent, bridge, terrace); see mountain.ts. */
+export const MTN = buildRoute(blendedBase);
+
+/**
+ * Is this point part of the mountain expedition (the landform replaces the jungle hills) or on its route corridor
+ * (plus `pad` metres)? Jungle placements use it to step aside, so the existing jungle is untouched where the
+ * mountain does not reach and nothing grows on the route.
+ */
+export function inMountainZone(x: number, z: number, pad = 2): boolean {
+  if (x < 20) return false;
+  if (mountainWeight(x, z) > 0.02) return true;
+  const h = routeNear(MTN, x, z);
+  return h.dist < h.hw + pad;
+}
+
+/** First route arc length that lies outside the jungle's walkable ellipse (the corridor walls start here). */
+const MTN_WALL_START = (() => {
+  for (const q of MTN.samples) if (Math.hypot((q.x - WALK_LIMIT.cx) / (WALK_LIMIT.rx - 1), (q.z - WALK_LIMIT.cz) / (WALK_LIMIT.rz - 1)) > 1) return q.s;
+  return 0;
+})();
+
+/** Does the jungle boundary ring leave a gap here for the mountain route? */
+export function ringOpening(x: number, z: number): boolean {
+  const h = routeNear(MTN, x, z);
+  return h.dist < h.hw + 0.18 + 0.25 + 0.5; // exactly the corridor lane: the ring's pieces are 1 m long here, so the gap is sealed by the corridor walls
+}
+
+/** Every invisible guard wall of the mountain route: corridor sides + the two platform rings. Shared by the collider asset and the validator. */
+export const MTN_GUARDS: GuardWall[] = (() => {
+  const exits = (cx: number, cz: number, r: number): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let i = 1; i < MTN.samples.length; i++) {
+      const a = MTN.samples[i - 1];
+      const b = MTN.samples[i];
+      const da = Math.hypot(a.x - cx, a.z - cz) - r;
+      const db = Math.hypot(b.x - cx, b.z - cz) - r;
+      if (da * db <= 0) out.push([b.x, b.z]);
+    }
+    return out;
+  };
+  const rp = PLATFORM.r + 0.25;
+  const rt = TERRACE.r - 0.2;
+  return [
+    ...corridorWalls(MTN, Math.max(0, MTN_WALL_START - 5)),
+    ...ringWalls(PLATFORM.x, PLATFORM.z, rp, PLATFORM.y, exits(PLATFORM.x, PLATFORM.z, rp), 1.45 + 0.18 + 0.25 + 0.4),
+    ...ringWalls(TERRACE.x, TERRACE.z, rt, TERRACE.y, exits(TERRACE.x, TERRACE.z, rt), 1.3 + 0.18 + 0.25 + 0.4),
+  ];
+})();
+
+/** Terrain LOD: 96 m root cells from (35, -300); a detailed root shows its fine tiles within `fine` m of the player (`fineLow` in the low tier), a coarse stand-in beyond. */
+export const TERRAIN_LOD = { x0: 35, z0: -300, size: 96, fine: 150, fineLow: 100, hysteresis: 20 } as const;
+
+/**
+ * Where the player is, for the diagnostics and the test results: the three jungle areas, or on the mountain the station of the route
+ * (climb, summit overlook, steep descent, cliff ledge, collapse ledge, gorge approach, rope bridge, waterfall terrace) or the open ground
+ * (ridge, valley, gorge) away from it.
+ */
+export function areaLabel(x: number, y: number, z: number): string {
+  if (mountainWeight(x, z) > 0.3) {
+    const h = routeNear(MTN, x, z);
+    if (h.dist < 14 && Math.abs(y - h.y) < 6) {
+      const names: Record<string, string> = { climb: 'mountain climb', summit: 'summit overlook', gully: 'steep descent', ledge: 'cliff ledge', cleft: 'collapse ledge', approach: 'gorge approach', bridge: 'rope bridge', terrace: 'waterfall terrace' };
+      return names[h.zone] ?? 'mountain';
+    }
+    const dv = Math.hypot(x - VALLEY.x, z - VALLEY.z);
+    return dv < 100 && y < 6 ? 'valley' : dv < 110 && y < 28 ? 'valley wall' : 'mountain ridge';
+  }
+  return areaAt(x, z);
+}
+
+/** Named viewpoints along the mountain expedition (stations for ?area=, headset tests and screenshots). */
+export const MTN_VIEWS = viewpoints(MTN);
+
+/**
+ * Terrain height: the jungle (relief, trail, stream, pool, mud) blended into the mountain landform east of
+ * x = 22, with the expedition route graded on top (bench, summit platform, collapse hollow, brink terrace).
+ */
+export function terrainHeight(x: number, z: number): number {
+  return x < 6 ? jungleHeight(x, z) : gradeRoute(MTN, x, z, blendedBase(x, z));
 }
 
 /** Terrain slope magnitude (rise/run) by central differences, for validation and splat rules. */
@@ -501,32 +522,51 @@ export function groundBlend(x: number, z: number, slopeIn?: number): { grass: nu
 // Culling cells and distance LOD (vegetation is static-batched per cell and class)
 // ---------------------------------------------------------------------------
 
+/** Camera far plane in the jungle (m): the fog hides 91 % of the world by 240 m, so nothing visible is ever cut (the old 100 m cut the backdrop cliff/waterfall/ridges). The mountain opens it up to 1 km. */
+export const JUNGLE_FAR = 260;
+
+/** Jungle landmarks and terrain tiles (not cell-batched) are drawn only within this distance (m) of the player; at 120 m the fog hides 68 % of them anyway. */
+export const JUNGLE_LANDMARK_CAP = 120;
+/** Vegetation cells are drawn only within this distance (m) in the jungle (61 % fog at 100 m; the ridge silhouettes carry the horizon). */
+export const JUNGLE_CELL_CAP = 100;
+
 /** Side of a square culling cell (m). One merged mesh per cell per class. */
 export const CHUNK = 28;
-export const chunkIndex = (x: number, z: number): [number, number] => [Math.floor((x - TERRAIN.x0) / CHUNK), Math.floor((z - TERRAIN.z0) / CHUNK)];
+/** Cell grid origin: covers the jungle and the whole mountain domain with non-negative indices. */
+export const CHUNK_ORIGIN = { x: -70, z: -300 } as const;
+export const chunkIndex = (x: number, z: number, size: number = CHUNK): [number, number] => [Math.floor((x - CHUNK_ORIGIN.x) / size), Math.floor((z - CHUNK_ORIGIN.z) / size)];
 
 /**
  * Distance rules (metres from the player to the nearest point of a cell) for each chunk class.
  * `max`: hidden when farther; `min`: hidden when nearer (the cheap far version).
  * Shared by the runtime ChunkLodSystem and tools/asset-stats.mjs so the budget estimate matches.
+ * The mountain adds two cheap far-field classes: `canopy` (valley/ridge tree crowns, opaque lit domes) and
+ * `crags` (rock pinnacles and towers). Their cells are 128 m so a whole valley is a handful of draws.
+ * On top of these, ChunkLodSystem caps everything at `viewCap(open)`: 130 m in the jungle, up to 1 km on the mountain.
  */
 export const CHUNK_LOD = {
-  'trees-hi': { min: 0, max: 42 },
-  'trees-lo': { min: 28, max: 1e9 },
-  'trees-far': { min: 0, max: 1e9 },
-  plants: { min: 0, max: 50 },
+  'trees-hi': { min: 0, max: 30 },
+  'trees-lo': { min: 30, max: 480 },
+  'trees-far': { min: 0, max: 480 },
+  plants: { min: 0, max: 36 },
   ground: { min: 0, max: 34 },
-  rocks: { min: 0, max: 62 },
-  deadwood: { min: 0, max: 48 },
+  rocks: { min: 0, max: 46 },
+  deadwood: { min: 0, max: 42 },
+  canopy: { min: 0, max: 520 },
+  crags: { min: 0, max: 760 },
 } as const;
 export type ChunkClass = keyof typeof CHUNK_LOD;
+/** Culling cell size per class (m). */
+export const CELL_SIZE: Record<ChunkClass, number> = { 'trees-hi': CHUNK, 'trees-lo': 56, 'trees-far': 56, plants: CHUNK, ground: CHUNK, rocks: CHUNK, deadwood: CHUNK, canopy: 128, crags: 128 };
+/** Largest distance anything is drawn at, by how open the view is (0 jungle .. 1 mountain top). */
+export const viewCap = (open: number): number => 130 + 900 * open;
 
-/** Distance from (x, z) to the nearest point of cell (ix, iz). */
-export function cellDistance(x: number, z: number, ix: number, iz: number): number {
-  const x0 = TERRAIN.x0 + ix * CHUNK;
-  const z0 = TERRAIN.z0 + iz * CHUNK;
-  const dx = Math.max(x0 - x, 0, x - (x0 + CHUNK));
-  const dz = Math.max(z0 - z, 0, z - (z0 + CHUNK));
+/** Distance from (x, z) to the nearest point of cell (ix, iz) of the given size. */
+export function cellDistance(x: number, z: number, ix: number, iz: number, size: number = CHUNK): number {
+  const x0 = CHUNK_ORIGIN.x + ix * size;
+  const z0 = CHUNK_ORIGIN.z + iz * size;
+  const dx = Math.max(x0 - x, 0, x - (x0 + size));
+  const dz = Math.max(z0 - z, 0, z - (z0 + size));
   return Math.hypot(dx, dz);
 }
 
@@ -536,14 +576,24 @@ export function cellDistance(x: number, z: number, ix: number, iz: number): numb
  * wall (always drawn) and the near crowns dominate it. 'low' therefore also drops the far wall beyond
  * 60 m, the ground-cover patches beyond 20 m, and hands detailed trees over to the cheap version at 24 m.
  */
-export const CHUNK_LOW_MAX: Partial<Record<ChunkClass, number>> = { 'trees-hi': 24, 'trees-far': 60, ground: 20, plants: 34 };
-export const CHUNK_LOW_MIN: Partial<Record<ChunkClass, number>> = { 'trees-lo': 20 };
+export const CHUNK_LOW_MAX: Partial<Record<ChunkClass, number>> = { 'trees-hi': 24, 'trees-far': 60, ground: 20, plants: 34, canopy: 300, crags: 420 };
+export const CHUNK_LOW_MIN: Partial<Record<ChunkClass, number>> = { 'trees-lo': 24 };
 
-export function chunkVisible(cls: ChunkClass, dist: number, low = false): boolean {
+/** Distance hysteresis (m): a cell that is already shown stays until `LOD_HYSTERESIS` past its limit, one that is hidden returns `LOD_HYSTERESIS` inside it. */
+export const LOD_HYSTERESIS = 1.5;
+
+/**
+ * Is a cell of class `cls` at `dist` metres drawn? `was` = it is drawn now (for hysteresis): without it a cell whose edge sits on a threshold
+ * toggles every 0.25 s while the player's head sways, a visible flicker. The detailed and the cheap tree versions meet at the SAME distance
+ * (hi max = lo min), so exactly one of them is drawn: no double-drawn overlap band, no gap.
+ */
+export function chunkVisible(cls: ChunkClass, dist: number, low = false, cap = 130, was?: boolean): boolean {
   const r = CHUNK_LOD[cls];
-  const max = low ? (CHUNK_LOW_MAX[cls] ?? r.max * 0.72) : r.max;
+  const max = Math.min(cap, low ? (CHUNK_LOW_MAX[cls] ?? r.max * 0.72) : r.max);
   const min = low ? (CHUNK_LOW_MIN[cls] ?? r.min) : r.min;
-  return dist <= max && dist >= min;
+  if (was === undefined) return dist <= max && dist >= min;
+  const h = LOD_HYSTERESIS;
+  return was ? dist <= max + h && dist >= min - h : dist <= max - h && dist >= min + h;
 }
 
 // ---------------------------------------------------------------------------
@@ -571,3 +621,13 @@ export const TEST_POSES: Record<'entrance' | 'trail' | 'clearing', TestPose> = {
   clearing: { id: 'clearing', label: 'Ancient Clearing (looking back)', x: 0, z: -57.5, yawDeg: 180 },
 };
 export type TestId = keyof typeof TEST_POSES;
+
+/**
+ * Height the temple's base sits at: the LOWEST ground under its footprint (so a platform 28 m wide never hangs over a dip; on the high side the
+ * first tier is simply buried). The scene node, the collider and the validator all use this one value.
+ */
+export const TEMPLE_BASE: number = (() => {
+  let lo = Infinity;
+  for (let i = 0; i <= 6; i++) for (let j = 0; j <= 4; j++) lo = Math.min(lo, terrainHeight(TEMPLE.x - TEMPLE.width / 2 + (TEMPLE.width * i) / 6, TEMPLE.z - TEMPLE.depth / 2 + (TEMPLE.depth * j) / 4));
+  return lo - 0.05;
+})();

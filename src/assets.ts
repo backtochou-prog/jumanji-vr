@@ -13,14 +13,17 @@
  */
 import { AssetType, defineAssets } from '@iwsdk/core';
 import { createGroundMists, createLightShafts } from './scene-assets/atmosphere.scene-asset.js';
-import { createRidge } from './scene-assets/background.scene-asset.js';
+import { createFarRanges, createRidge } from './scene-assets/background.scene-asset.js';
+import { createBridgeColliders, createRopeBridge } from './scene-assets/bridge.scene-asset.js';
+import { createShelf, createShelfCollider } from './scene-assets/collapse.scene-asset.js';
+import { createFallMist, createGiantFall, createMountainWater } from './scene-assets/falls.scene-asset.js';
 import { CHUNK_ASSETS, createChunk } from './scene-assets/chunks.scene-asset.js';
 import { createColliders } from './scene-assets/colliders.scene-asset.js';
 import { createGiantLog } from './scene-assets/deadwood.scene-asset.js';
 import { createCliff, createTrickle, createWaterfall } from './scene-assets/rocks.scene-asset.js';
 import { createAltar, createHeartstone, createRuinPillars } from './scene-assets/ruins.scene-asset.js';
 import { createSpire, createSpireGrowth, createTemple, createTempleGrowth } from './scene-assets/temple.scene-asset.js';
-import { createTerrain } from './scene-assets/terrain.scene-asset.js';
+import { createTerrain, createTerrainFar } from './scene-assets/terrain.scene-asset.js';
 import { createEntranceCanopy, createRootArch } from './scene-assets/trees.scene-asset.js';
 import { createWater } from './scene-assets/water.scene-asset.js';
 import { SPIRE } from './world/layout.js';
@@ -50,6 +53,7 @@ timed('vegetation chunks (incl. species prototypes)', () => {
 export default defineAssets({
   // Ground, water, backdrop
   'jungle-terrain': timed('terrain', createTerrain),
+  'terrain-far': timed('terrain', createTerrainFar),
   water: timed('water', createWater),
   'pool-trickle': createTrickle(),
   cliff: timed('cliff', createCliff),
@@ -57,6 +61,16 @@ export default defineAssets({
   'ridge-0': createRidge(0),
   'ridge-1': createRidge(1),
   'ridge-2': createRidge(2),
+
+  // Mountain expedition: far ranges, giant waterfall + water, rope bridge, collapsing ledge
+  'far-ranges': createFarRanges(),
+  'mountain-water': timed('mountain water', createMountainWater),
+  'giant-fall': timed('mountain water', createGiantFall),
+  'fall-mist': createFallMist(),
+  'rope-bridge': timed('bridge', createRopeBridge),
+  'bridge-colliders': createBridgeColliders(),
+  'collapse-shelf': timed('collapse shelf', createShelf),
+  'shelf-collider': createShelfCollider(),
 
   // Landmarks + the three areas
   'entrance-canopy': timed('landmarks', createEntranceCanopy),

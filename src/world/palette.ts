@@ -43,6 +43,14 @@ export const PAL = {
   ruin: '#8e9288',
   ruinDark: '#565b54',
 
+  // Mountain rock (cliffs, ledges): warm-grey sedimentary strata, iron staining, wet dark rock
+  cliff: '#7f7b6a',
+  cliffDark: '#46433a',
+  cliffWarm: '#9a8460',
+  cliffWet: '#34393a',
+  scree: '#8b867a',
+  valleyForest: '#1d4125',
+
   // The single warm accent
   accent: '#e48a2e',
   accentPale: '#f0c872',

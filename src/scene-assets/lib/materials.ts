@@ -17,6 +17,7 @@ import {
   DoubleSide,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  Vector3,
 } from '@iwsdk/core';
 import type { Material } from '@iwsdk/core';
 import { PAL, ROUGH } from '../../world/palette.js';
@@ -89,6 +90,50 @@ groundMaterial.onBeforeCompile = (shader) => {
 };
 groundMaterial.customProgramCacheKey = () => 'jungle-ground-v2';
 
+/**
+ * Mountain ground: the same grain, but projected from above on flat ground and from the side on steep faces
+ * (blend by surface steepness), so cliffs read as rock instead of a top-down texture smeared down the wall.
+ * Side projections are only sampled where the ground is steep (a dynamic branch), so flat ground costs the same
+ * as `groundMaterial`. No bump map (it would smear the same way); relief comes from the geometry and vertex colour.
+ */
+export const mountainGroundMaterial = vertexColored(
+  createSceneMaterial({
+    id: 'mountain-ground',
+    model: 'standard',
+    baseColor: '#ffffff',
+    roughness: ROUGH.ground,
+    textures: { albedo: grain(11, '#55523f', '#f2efe2', 80) },
+  }),
+);
+mountainGroundMaterial.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;\nvWNor = normalize( mat3( modelMatrix ) * objectNormal );');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
+    .replace(
+      '#include <map_fragment>',
+      `#ifdef USE_MAP
+      vec3 wn = abs( normalize( vWNor ) );
+      float steep = smoothstep( 0.5, 0.82, 1.0 - wn.y );
+      vec2 gUv = vWPos.xz / 2.5;
+      vec4 gA = texture2D( map, gUv );
+      vec4 gB = texture2D( map, mat2( 0.8, -0.6, 0.6, 0.8 ) * gUv * 0.37 + vec2( 0.21, 0.63 ) );
+      float gM = smoothstep( 0.25, 0.75, 0.5 + 0.5 * sin( gUv.x * 0.71 + sin( gUv.y * 0.93 ) * 1.7 ) );
+      vec4 gTop = mix( gA, gB, gM * 0.6 );
+      if ( steep > 0.01 ) {
+        vec4 sx = texture2D( map, vec2( vWPos.z, vWPos.y ) / 2.5 );
+        vec4 sz = texture2D( map, vec2( vWPos.x, vWPos.y ) / 2.5 + vec2( 0.37, 0.11 ) );
+        float wx = wn.x * wn.x;
+        float wz = wn.z * wn.z;
+        gTop = mix( gTop, ( sx * wx + sz * wz ) / max( wx + wz, 1e-4 ), steep );
+      }
+      diffuseColor *= gTop;
+    #endif`,
+    );
+};
+mountainGroundMaterial.customProgramCacheKey = () => 'mountain-ground-v1';
+
 // ---------------------------------------------------------------------------
 // Foliage cards (+ wood parts of plants/trees that must share the draw call)
 // ---------------------------------------------------------------------------
@@ -110,6 +155,71 @@ foliageCardMaterial.onBeforeCompile = (shader) => {
   );
 };
 foliageCardMaterial.customProgramCacheKey = () => 'jungle-card-v1';
+
+
+/**
+ * Live wind / proximity state for the plant material. Written each frame by ReactiveFoliageSystem; the shader reads it.
+ * `body` = 3 world points (feet and both hands) that push low plants aside.
+ */
+export const swayState = {
+  time: { value: 0 },
+  wind: { value: 1 },
+  body: { value: [new Vector3(0, -999, 0), new Vector3(0, -999, 0), new Vector3(0, -999, 0)] },
+};
+
+/**
+ * Plants and ground cover: the same atlas material, plus gentle wind sway and a soft push away from the player's body and hands.
+ * Only the baked plant chunks carry the `aSway` attribute (weight 0 at the root .. 1 at the tip, and the plant's height), so trunks and
+ * stems stay planted and flat litter does not move. Pure vertex-shader work: no extra draw call, no extra pass.
+ */
+export const plantFoliageMaterial = new MeshStandardMaterial({
+  name: 'jungle-plant-card',
+  map: leafAtlas(),
+  vertexColors: true,
+  roughness: ROUGH.foliage,
+  metalness: 0,
+  side: DoubleSide,
+  alphaTest: 0.45,
+});
+plantFoliageMaterial.onBeforeCompile = (shader) => {
+  shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n  normal = normalize( vNormal );');
+  shader.uniforms.uTime = swayState.time;
+  shader.uniforms.uWind = swayState.wind;
+  shader.uniforms.uBody = swayState.body;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec2 aSway;\nuniform float uTime;\nuniform float uWind;\nuniform vec3 uBody[3];')
+    .replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+  {
+    // chunk meshes are baked in world space (identity model matrix), so object space == world space
+    float w = aSway.x;
+    float sz = aSway.y;
+    float ph = transformed.x * 0.31 + transformed.z * 0.23;
+    float g = sin(uTime * 1.25 + ph) + 0.55 * sin(uTime * 2.7 + ph * 1.9 + 1.3);
+    float gust = 0.65 + 0.35 * sin(uTime * 0.23 + transformed.x * 0.05 + transformed.z * 0.04);
+    float amp = uWind * w * (0.012 + 0.028 * sqrt(sz));
+    transformed.x += 0.82 * g * gust * amp + 0.15 * amp * sin(uTime * 7.3 + ph * 3.1);
+    transformed.z += 0.57 * g * gust * amp;
+    for (int i = 0; i < 3; i++) {
+      vec3 pp = uBody[i];
+      vec2 d = transformed.xz - pp.xz;
+      float dist = length(d);
+      float reach = i == 0 ? 1.15 : 0.55;
+      float push = (1.0 - smoothstep(0.12, reach, dist)) * (1.0 - smoothstep(0.45, 1.15, abs(transformed.y - pp.y))) * w;
+      transformed.xz += (d / max(dist, 0.05)) * push * (0.12 + 0.2 * min(sz, 1.6));
+      transformed.y -= push * 0.06 * min(sz, 1.6);
+    }
+  }`,
+    );
+};
+plantFoliageMaterial.customProgramCacheKey = () => 'jungle-plant-sway-v1';
+
+/** Valley canopy: opaque lit crowns, vertex colour only (no texture, no alpha test: zero overdraw cost). */
+export const canopyMaterial = new MeshStandardMaterial({ name: 'mountain-canopy', vertexColors: true, roughness: ROUGH.foliage + 0.1, metalness: 0 });
+
+/** Cracks of the collapsing ledge: dark, unlit, fades in as the player approaches (opacity driven by CollapseSystem). */
+export const crackMaterial = new MeshBasicMaterial({ name: 'ledge-cracks', color: '#16110c', transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 
 // ---------------------------------------------------------------------------
 // Stone, wood, ruins
@@ -214,8 +324,8 @@ export const waterfallMaterial = createSceneMaterial({
   id: 'jungle-waterfall',
   model: 'standard',
   baseColor: '#ffffff',
-  emissive: '#bfe6dc',
-  emissiveIntensity: 0.35,
+  emissive: '#9fc9c0',
+  emissiveIntensity: 0.1,
   opacity: 0.82,
   roughness: 0.35,
   side: 'double',
@@ -230,8 +340,8 @@ export const waterfallMaterial = createSceneMaterial({
         { frequency: [150, 9], amplitude: 0.4 },
       ],
       ramp: [
-        { at: 0, color: '#8fb9b0' },
-        { at: 1, color: '#ffffff' },
+        { at: 0, color: '#6f9992' },
+        { at: 1, color: '#e9f4f1' },
       ],
       sampler: { wrapU: 'repeat', wrapV: 'repeat' },
     },

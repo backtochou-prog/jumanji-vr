@@ -7,7 +7,7 @@
  * buried, so rocks read as grown into the ground, never resting on it.
  */
 import { BufferGeometry, CircleGeometry, Color, Float32BufferAttribute, Group, IcosahedronGeometry, Mesh, Vector3 } from '@iwsdk/core';
-import { CLIFF, fbm, makeRandom, smoothstep } from '../world/layout.js';
+import { CLIFF, SCALE, fbm, makeRandom, smoothstep } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import type { Part } from './lib/geo.js';
 import { displace, mergeParts, tubeAlong } from './lib/geo.js';
@@ -130,6 +130,8 @@ export function createCliff(): Mesh {
   g.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
   g.setIndex(indices);
   g.computeVertexNormals();
+  // authored 64 x 40 m, baked at SCALE.cliff: a 115 x 72 m rock wall behind the clearing, taller than the tallest tree
+  g.scale(SCALE.cliff, SCALE.cliff, SCALE.cliff);
   g.computeBoundingBox();
   g.computeBoundingSphere();
   const m = new Mesh(g, rockMaterial);
@@ -161,6 +163,9 @@ export function createWaterfall(): Group {
   g.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
   g.setIndex(indices);
   g.computeVertexNormals();
+  g.scale(SCALE.cliff, SCALE.cliff, SCALE.cliff);
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
   const fall = new Mesh(g, waterfallMaterial);
   fall.name = 'WaterfallSheet';
 
@@ -176,8 +181,10 @@ export function createWaterfall(): Group {
     mc[i * 3 + 2] = k;
   }
   mistGeo.setAttribute('color', new Float32BufferAttribute(mc, 3));
+  mistGeo.scale(SCALE.cliff, SCALE.cliff, SCALE.cliff);
+  mistGeo.computeBoundingSphere();
   const mist = new Mesh(mistGeo, lightShaftMaterial);
-  mist.position.set(0, 0.4, cliffZ(0, 0) + 4);
+  mist.position.set(0, 0.4 * SCALE.cliff, (cliffZ(0, 0) + 4) * SCALE.cliff);
   mist.name = 'WaterfallMist';
 
   const grp = new Group();

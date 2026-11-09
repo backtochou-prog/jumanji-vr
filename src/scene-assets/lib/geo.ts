@@ -293,7 +293,7 @@ export function softNormals(center: Vector3, upBias = 0.55): (p: Vector3, n: Vec
  * Merge already-baked geometries (position/normal/uv/colour, any colour item size) with a transform each.
  * Used to compose clusters/patches out of small assets and to fuse many world-space pieces into one draw call.
  */
-export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-instance colour multiplier [r,g,b] */ tint?: [number, number, number] }[]): BufferGeometry {
+export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-instance colour multiplier [r,g,b] */ tint?: [number, number, number] }[], sway = false): BufferGeometry {
   let vCount = 0;
   let iCount = 0;
   let colorSize = 3;
@@ -308,6 +308,8 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
   const col = new Float32Array(vCount * colorSize);
   const uv = new Float32Array(vCount * 2);
   const idx = new Uint32Array(iCount);
+  /** Per-vertex wind/proximity weight (x) and the plant's height (y): 0 at the root, 1 at the tip of the prototype (only when `sway`). */
+  const sw = sway ? new Float32Array(vCount * 2) : null;
   let vo = 0;
   let io = 0;
   const p = new Vector3();
@@ -315,6 +317,8 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
   const nm = new Matrix3();
   for (const it of items) {
     const g = it.geo;
+    if (sw && !g.boundingBox) g.computeBoundingBox();
+    const hgt = sw ? Math.max(0.0001, g.boundingBox!.max.y) : 1;
     const gp = g.getAttribute('position');
     const gn = g.getAttribute('normal');
     const gc = g.getAttribute('color');
@@ -322,6 +326,11 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
     if (it.m) nm.getNormalMatrix(it.m);
     for (let i = 0; i < gp.count; i++) {
       p.fromBufferAttribute(gp, i);
+      if (sw) {
+        const wgt = Math.min(1, Math.max(0, p.y / Math.max(hgt, 0.5)));
+        sw[(vo + i) * 2] = Math.pow(wgt, 1.3);
+        sw[(vo + i) * 2 + 1] = hgt;
+      }
       if (it.m) p.applyMatrix4(it.m);
       pos.set([p.x, p.y, p.z], (vo + i) * 3);
       if (gn) {
@@ -348,6 +357,7 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
   out.setAttribute('normal', new BufferAttribute(nor, 3));
   out.setAttribute('color', new BufferAttribute(col, colorSize));
   out.setAttribute('uv', new BufferAttribute(uv, 2));
+  if (sw) out.setAttribute('aSway', new BufferAttribute(sw, 2));
   out.setIndex(new BufferAttribute(idx, 1));
   out.computeBoundingBox();
   out.computeBoundingSphere();

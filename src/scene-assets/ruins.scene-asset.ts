@@ -6,7 +6,7 @@
  * glowing amber heart, resting in a worn recess on a moss-eaten altar.
  */
 import { BoxGeometry, BufferGeometry, CylinderGeometry, Color, Group, IcosahedronGeometry, LatheGeometry, Mesh, Vector2, Vector3 } from '@iwsdk/core';
-import { ALTAR_TOP_Y, PILLARS, fbm, makeRandom, smoothstep, terrainHeight } from '../world/layout.js';
+import { ALTAR_TOP_Y, PILLARS, SCALE, fbm, makeRandom, smoothstep, terrainHeight } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import type { Part } from './lib/geo.js';
 import { displace, lerpColor, mat, mergeBaked, mergeParts, tubeAlong } from './lib/geo.js';
@@ -217,7 +217,8 @@ function stoneRelicColor(p: Vector3, n: Vector3): Color {
 
 /** All ruined pillars of the clearing in ONE mesh (world coordinates, each sunk 5 cm into the ground). */
 export function createRuinPillars(): Mesh {
-  const items = PILLARS.map((p, i) => ({ geo: createPillar(p.seed, p.h, p.broken).geometry, m: mat(p.x, terrainHeight(p.x, p.z) - 0.05, p.z, i === 1 ? 0.07 : 0, i * 0.64, 0) }));
+  // authored at 2-4 m, baked at SCALE.pillar: PILLARS[].h is the WORLD height
+  const items = PILLARS.map((p, i) => ({ geo: createPillar(p.seed, p.h / SCALE.pillar, p.broken).geometry, m: mat(p.x, terrainHeight(p.x, p.z) - 0.05 * SCALE.pillar, p.z, i === 1 ? 0.07 : 0, i * 0.64, 0, SCALE.pillar) }));
   const m = new Mesh(mergeBaked(items), ruinStoneMaterial);
   m.name = 'RuinPillars';
   m.castShadow = true;

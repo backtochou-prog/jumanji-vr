@@ -16,13 +16,13 @@
  */
 import { BufferGeometry, Matrix4, Mesh, Quaternion, Vector3 } from '@iwsdk/core';
 import { BAKED } from '../world/baked.js';
-import { CHUNK, chunkIndex } from '../world/layout.js';
+import { CELL_SIZE, CHUNK, chunkIndex } from '../world/layout.js';
 import type { ChunkClass } from '../world/layout.js';
 import { makeRandom } from '../world/layout.js';
 import type { RockKind } from './rocks.scene-asset.js';
 import { createBranch, createLog, createRoots } from './deadwood.scene-asset.js';
 import { mergeBaked } from './lib/geo.js';
-import { barkMaterial, foliageCardMaterial, rockMaterial } from './lib/materials.js';
+import { barkMaterial, canopyMaterial, foliageCardMaterial, plantFoliageMaterial, rockMaterial } from './lib/materials.js';
 import {
   createBroadleaf,
   createFernCluster,
@@ -34,6 +34,7 @@ import {
   createTreeFern,
 } from './plants.scene-asset.js';
 import { createRock } from './rocks.scene-asset.js';
+import { createCanopyClump, createPinnacle, createVineCurtain } from './mountain-props.scene-asset.js';
 import { createTree } from './trees.scene-asset.js';
 import type { TreeKind } from '../world/placements.js';
 
@@ -50,20 +51,25 @@ function prototype(id: string): Mesh {
   if (a === 'reed') return createReed(Number(b));
   if (a === 'pads') return createPads(Number(b));
   if (a === 'rock') return createRock(b as RockKind, Number(c));
+  if (a === 'canopy') return createCanopyClump(Number(b));
+  if (a === 'pinnacle') return createPinnacle(Number(b));
+  if (a === 'vine') return createVineCurtain(Number(b));
   if (a === 'log') return createLog(Number(b));
   if (a === 'branch') return createBranch(Number(b));
   if (a === 'roots') return createRoots(Number(b));
   throw new Error(`unknown vegetation prototype ${id}`);
 }
 
-const MATERIAL: Record<ChunkClass, typeof foliageCardMaterial | typeof rockMaterial | typeof barkMaterial> = {
+const MATERIAL: Record<ChunkClass, typeof foliageCardMaterial | typeof rockMaterial | typeof barkMaterial | typeof canopyMaterial> = {
   'trees-hi': foliageCardMaterial,
   'trees-lo': foliageCardMaterial,
   'trees-far': foliageCardMaterial,
-  plants: foliageCardMaterial,
-  ground: foliageCardMaterial,
+  plants: plantFoliageMaterial,
+  ground: plantFoliageMaterial,
   rocks: rockMaterial,
   deadwood: barkMaterial,
+  canopy: canopyMaterial,
+  crags: rockMaterial,
 };
 
 const protoCache = new Map<string, BufferGeometry>();
@@ -89,7 +95,7 @@ export const CHUNK_ASSETS: { id: string; cls: ChunkClass; ix: number; iz: number
   for (const cls of Object.keys(BAKED.instances) as ChunkClass[]) {
     for (const flat of Object.values(BAKED.instances[cls])) {
       for (let i = 0; i < flat.length; i += 7) {
-        const [ix, iz] = chunkIndex(flat[i], flat[i + 2]);
+        const [ix, iz] = chunkIndex(flat[i], flat[i + 2], CELL_SIZE[cls]);
         const id = `veg-${cls}-${ix}-${iz}`;
         if (!seen.has(id)) seen.set(id, { id, cls, ix, iz });
       }
@@ -104,7 +110,7 @@ export function createChunk(cls: ChunkClass, ix: number, iz: number): Mesh {
   const items: { geo: BufferGeometry; m: Matrix4; tint: [number, number, number] }[] = [];
   for (const [id, flat] of Object.entries(BAKED.instances[cls])) {
     for (let i = 0; i < flat.length; i += 7) {
-      if (chunkIndex(flat[i], flat[i + 2]).join() !== `${ix},${iz}`) continue;
+      if (chunkIndex(flat[i], flat[i + 2], CELL_SIZE[cls]).join() !== `${ix},${iz}`) continue;
       const [x, y, z, yaw, tx, tz, s] = flat.slice(i, i + 7);
       // World-frame ground tilt composed with the instance's own yaw.
       qx.setFromAxisAngle(AX, tx);
@@ -115,7 +121,7 @@ export function createChunk(cls: ChunkClass, ix: number, iz: number): Mesh {
       items.push({ geo: protoGeo(id), m: new Matrix4().compose(new Vector3(x, y, z), q, new Vector3(s, s, s)), tint: [k, k * (0.97 + 0.06 * rng()), k * (0.95 + 0.1 * rng())] });
     }
   }
-  const mesh = new Mesh(mergeBaked(items), MATERIAL[cls]);
+  const mesh = new Mesh(mergeBaked(items, cls === 'plants' || cls === 'ground'), MATERIAL[cls]);
   mesh.name = `Chunk_${cls}_${ix}_${iz}`;
   return mesh;
 }

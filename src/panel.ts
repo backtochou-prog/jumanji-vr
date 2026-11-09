@@ -7,6 +7,9 @@ import { perfOverlay } from './diagnostics/perf-overlay.js';
 import { applyTier, loadTier, saveTier } from './settings/quality.js';
 import type { QualityTier } from './settings/quality.js';
 import { QualityGovernor } from './systems/quality-governor.js';
+import { WildlifeSystem } from './wildlife/wildlife-system.js';
+import { wctx } from './wildlife/context.js';
+import { audioInfo } from './audio/ambient-audio.js';
 import { detectXR, grantedFeatures } from './xr/capabilities.js';
 
 /**
@@ -33,14 +36,26 @@ export class PanelSystem extends createSystem({}) {
     const vignetteLabel = el<UIKit.Text>('vignette-label');
     const qualityLabel = el<UIKit.Text>('quality-label');
     const perfLabel = el<UIKit.Text>('perf-label');
+    const moveLabel = el<UIKit.Text>('move-label');
+    const reducedLabel = el<UIKit.Text>('reduced-label');
+    const seatedLabel = el<UIKit.Text>('seated-label');
+    const hazardLabel = el<UIKit.Text>('hazard-label');
     const copyLabel = el<UIKit.Text>('copy-label');
+    const soundLabel = el<UIKit.Text>('sound-label');
+    const wildlifeLabel = el<UIKit.Text>('wildlife-label');
 
     const refreshLabels = () => {
       const c = this.comfort;
       turnLabel?.setProperties({ text: c.turnMode === 'snap' ? `Snap turn ${c.snapAngle} deg` : 'Smooth turn' });
       speedLabel?.setProperties({ text: `Speed ${c.walkSpeed} m/s` });
+      moveLabel?.setProperties({ text: c.moveReference === 'hand' ? 'Move by hand' : 'Move by head' });
+      reducedLabel?.setProperties({ text: c.reducedMotion ? 'Reduced motion on' : 'Reduced motion off' });
+      seatedLabel?.setProperties({ text: c.seated ? 'Seated' : 'Standing' });
+      hazardLabel?.setProperties({ text: c.hazardAssist ? 'Auto-slow on' : 'Auto-slow off' });
       perfLabel?.setProperties({ text: perfOverlay.enabled ? 'Diagnostics on' : 'Diagnostics off' });
       qualityLabel?.setProperties({ text: this.tier === 'high' ? 'Quality high' : 'Quality low (faster)' });
+      soundLabel?.setProperties({ text: audioInfo.enabled ? 'Sound on' : 'Sound off' });
+      wildlifeLabel?.setProperties({ text: wctx.enabled ? 'Wildlife on' : 'Wildlife off' });
       vignetteLabel?.setProperties({ text: c.vignette === 0 ? 'Vignette off' : `Vignette ${Math.round(c.vignette * 100)}%` });
     };
     refreshLabels();
@@ -66,6 +81,23 @@ export class PanelSystem extends createSystem({}) {
       this.comfort.vignette = cycle(VIGNETTE_LEVELS, this.comfort.vignette);
       this.changed(refreshLabels);
     };
+    const onMove = () => {
+      this.comfort.moveReference = this.comfort.moveReference === 'head' ? 'hand' : 'head';
+      this.changed(refreshLabels);
+    };
+    const onReduced = () => {
+      this.comfort.reducedMotion = !this.comfort.reducedMotion;
+      if (this.comfort.reducedMotion && this.comfort.vignette < 0.5) this.comfort.vignette = 0.5;
+      this.changed(refreshLabels);
+    };
+    const onHazard = () => {
+      this.comfort.hazardAssist = !this.comfort.hazardAssist;
+      this.changed(refreshLabels);
+    };
+    const onSeated = () => {
+      this.comfort.seated = !this.comfort.seated;
+      this.changed(refreshLabels);
+    };
     const onQuality = () => {
       this.tier = this.tier === 'high' ? 'low' : 'high';
       saveTier(this.tier);
@@ -75,6 +107,15 @@ export class PanelSystem extends createSystem({}) {
         if (this.tier === 'high') gov.reset();
       }
       applyTier(this.world, this.tier);
+      refreshLabels();
+    };
+    const onSound = () => {
+      // the click itself is the user gesture that lets the browser start audio
+      this.world.getSystem(WildlifeSystem)?.audio.setEnabled(!audioInfo.enabled);
+      refreshLabels();
+    };
+    const onWildlife = () => {
+      this.world.getSystem(WildlifeSystem)?.setEnabled(!wctx.enabled);
       refreshLabels();
     };
     const onPerf = () => {
@@ -89,7 +130,7 @@ export class PanelSystem extends createSystem({}) {
       refreshLabels();
       startPerfTest(this.world, id, { returnToStart: true });
     };
-    for (const [id, fn] of [['perf-button', onPerf], ['copy-button', onCopy], ['test-entrance-button', testBtn('entrance')], ['test-trail-button', testBtn('trail')], ['test-clearing-button', testBtn('clearing')], ['turn-button', onTurn], ['speed-button', onSpeed], ['vignette-button', onVignette], ['quality-button', onQuality]] as const) {
+    for (const [id, fn] of [['perf-button', onPerf], ['copy-button', onCopy], ['test-entrance-button', testBtn('entrance')], ['test-trail-button', testBtn('trail')], ['test-clearing-button', testBtn('clearing')], ['turn-button', onTurn], ['speed-button', onSpeed], ['vignette-button', onVignette], ['move-button', onMove], ['reduced-button', onReduced], ['seated-button', onSeated], ['hazard-button', onHazard], ['quality-button', onQuality], ['sound-button', onSound], ['wildlife-button', onWildlife]] as const) {
       const b = el(id);
       b?.addEventListener('click', fn);
       this.cleanupFuncs.push(() => b?.removeEventListener('click', fn));

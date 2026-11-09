@@ -2,7 +2,9 @@ import { CanvasTexture, createSystem, DoubleSide, Mesh, MeshBasicMaterial, Plane
 import { governorInfo } from '../systems/quality-governor.js';
 import { chunkStats } from '../systems/chunk-lod-system.js';
 import { qualityState } from '../settings/quality.js';
-import { areaAt } from '../world/layout.js';
+import { areaLabel } from '../world/layout.js';
+import { atmosphere } from '../systems/atmosphere-system.js';
+import { lodInfo } from '../systems/chunk-lod-system.js';
 import { metrics } from './frame-metrics.js';
 import { isEmulated, perfTest } from './perf-test.js';
 
@@ -60,11 +62,13 @@ function lines(world: { player: { getWorldPosition(v: Vector3): Vector3 }; rende
     [`tier ${qualityState.tier.toUpperCase()}  shadows ${qualityState.shadows ? 'on' : 'off'}`, WHITE],
     [`governor: ${governorInfo.state}`, governorInfo.step ? YELLOW : GREY],
     ...(isEmulated() ? ([['EMULATOR (not a headset)', RED]] as Line[]) : []),
-    [`pos ${tmp.x.toFixed(1)}, ${tmp.z.toFixed(1)}   ${areaAt(tmp.x, tmp.z)}`, WHITE],
+    [`${areaLabel(tmp.x, tmp.y, tmp.z)}   pos ${tmp.x.toFixed(0)}, ${tmp.y.toFixed(0)}, ${tmp.z.toFixed(0)}`, WHITE],
+    [`view ${(atmosphere.open * 100).toFixed(0)}%  far ${atmosphere.far.toFixed(0)} m  terrain ${lodInfo.fineRoots} fine / ${lodInfo.coarseRoots} coarse`, GREY],
     [`geo ${info.memory.geometries}  tex ${info.memory.textures}  prog ${info.programs?.length ?? 0}${mem ? `  heap ${(mem.usedJSHeapSize / 1048576).toFixed(0)}MB` : ''}`, GREY],
   ];
   if (perfTest.state !== 'idle') {
-    const label = perfTest.state === 'warm-up' ? `TEST ${perfTest.id}: warm-up ${perfTest.secondsLeft.toFixed(0)} s` : perfTest.state === 'sampling' ? `TEST ${perfTest.id}: SAMPLING ${perfTest.secondsLeft.toFixed(0)} s` : `TEST ${perfTest.id}: ${perfTest.state}`;
+    const pos = perfTest.suiteTotal ? ` (${perfTest.suiteTotal - perfTest.queue.length}/${perfTest.suiteTotal})` : '';
+    const label = perfTest.state === 'warm-up' ? `TEST ${perfTest.id}${pos}: warm-up ${perfTest.secondsLeft.toFixed(0)} s` : perfTest.state === 'sampling' ? `TEST ${perfTest.id}${pos}: SAMPLING ${perfTest.secondsLeft.toFixed(0)} s` : `TEST ${perfTest.id}: ${perfTest.state}`;
     out.push([label, YELLOW]);
     if (perfTest.status) out.push([perfTest.status, perfTest.state === 'done' ? GREEN : WHITE]);
   }
@@ -83,12 +87,12 @@ export class PerfOverlaySystem extends createSystem({}) {
   init(): void {
     this.canvas = document.createElement('canvas');
     this.canvas.width = 512;
-    this.canvas.height = 352;
+    this.canvas.height = 416;
     this.ctx = this.canvas.getContext('2d')!;
     this.tex = new CanvasTexture(this.canvas);
     this.tex.colorSpace = SRGBColorSpace;
     const mat = new MeshBasicMaterial({ map: this.tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false, side: DoubleSide });
-    this.mesh = new Mesh(new PlaneGeometry(0.2, 0.1375), mat);
+    this.mesh = new Mesh(new PlaneGeometry(0.2, 0.1625), mat);
     this.mesh.name = 'PerfOverlay';
     this.mesh.renderOrder = 1000;
     this.mesh.frustumCulled = false;
@@ -120,10 +124,10 @@ export class PerfOverlaySystem extends createSystem({}) {
     if (immersive) {
       const c = this.ctx;
       c.fillStyle = 'rgba(8,16,12,0.86)';
-      c.fillRect(0, 0, 512, 352);
+      c.fillRect(0, 0, 512, 416);
       c.strokeStyle = '#3a5a46';
       c.lineWidth = 4;
-      c.strokeRect(2, 2, 508, 348);
+      c.strokeRect(2, 2, 508, 412);
       c.font = 'bold 22px monospace';
       c.textBaseline = 'top';
       ls.forEach(([t, col], i) => {

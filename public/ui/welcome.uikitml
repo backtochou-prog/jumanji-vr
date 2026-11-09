@@ -110,11 +110,33 @@
     </Button>
   </div>
   <div class="row">
+    <Button id="move-button" class="chip">
+      <ButtonLabel id="move-label">Move by head</ButtonLabel>
+    </Button>
+    <Button id="reduced-button" class="chip">
+      <ButtonLabel id="reduced-label">Reduced motion off</ButtonLabel>
+    </Button>
+    <Button id="seated-button" class="chip">
+      <ButtonLabel id="seated-label">Standing</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row">
     <Button id="speed-button" class="chip">
       <ButtonLabel id="speed-label">Speed 2.5 m/s</ButtonLabel>
     </Button>
     <Button id="vignette-button" class="chip">
       <ButtonLabel id="vignette-label">Vignette 50%</ButtonLabel>
+    </Button>
+    <Button id="hazard-button" class="chip">
+      <ButtonLabel id="hazard-label">Auto-slow on</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row">
+    <Button id="sound-button" class="chip">
+      <ButtonLabel id="sound-label">Sound on</ButtonLabel>
+    </Button>
+    <Button id="wildlife-button" class="chip">
+      <ButtonLabel id="wildlife-label">Wildlife on</ButtonLabel>
     </Button>
   </div>
 </Panel>

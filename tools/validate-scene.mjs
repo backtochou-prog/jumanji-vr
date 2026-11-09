@@ -20,6 +20,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as L from '../src/world/layout.ts';
 import * as P from '../src/world/placements.ts';
+import * as M from '../src/world/mountain.ts';
+import * as MP from '../src/world/mountain-placements.ts';
+import * as C from '../src/world/collapse.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scene = JSON.parse(readFileSync(resolve(here, '../public/scenes/main.iwsdk.scene.json'), 'utf8'));
@@ -37,12 +40,13 @@ console.log('1. contact: nothing floats');
   // Vegetation, rocks and deadwood live in src/world/baked.ts (what the runtime actually builds).
   const { BAKED } = await import('../src/world/baked.ts');
   const exempt = new Set(['pads-0']); // floating pads sit on the water surface on purpose
+  const exemptClass = new Set(['canopy', 'crags']); // crowns sit on their trunk; towers are sunk into slopes by design
   let n = 0;
   let worst = { d: -Infinity, id: '' };
   let deepest = { d: Infinity, id: '' };
   for (const [cls, byAsset] of Object.entries(BAKED.instances)) {
     for (const [asset, flat] of Object.entries(byAsset)) {
-      if (exempt.has(asset)) continue;
+      if (exempt.has(asset) || exemptClass.has(cls)) continue;
       for (let i = 0; i < flat.length; i += 7) {
         const x = flat[i], y = flat[i + 1], z = flat[i + 2];
         const rel = y - L.terrainHeight(x, z);
@@ -58,9 +62,10 @@ console.log('1. contact: nothing floats');
     const t = node.transform?.position;
     const a = node.content?.asset;
     if (!t || !a || node.content.type !== 'asset') continue;
-    if (['cliff', 'waterfall', 'pool-trickle', 'heartstone', 'welcome-panel', 'entrance-canopy'].includes(node.id)) continue;
+    if (['cliff', 'waterfall', 'pool-trickle', 'heartstone', 'welcome-panel', 'entrance-canopy', 'rope-bridge', 'bridge-colliders', 'giant-fall', 'fall-mist', 'mountain-water', 'collapse-shelf', 'shelf-collider'].includes(node.id) || /^far-range/.test(node.id) || node.id === 'terrain-far') continue;
     const above = t[1] - L.terrainHeight(t[0], t[2]);
-    if (above > 0.7 || above < -1.2) err(`${node.id} is ${above.toFixed(2)} m from the ground`);
+    // the fallen giant's pivot is its axis (radius ~1.2 m, sunk ~0.4 m)
+    if (above > (node.id === 'fallen-giant' ? L.FALLEN_GIANT.radius : 0.7) || above < -1.2) err(`${node.id} is ${above.toFixed(2)} m from the ground`);
   }
   ok(`${n} baked instances checked: highest above ground ${worst.d.toFixed(3)} m (${worst.id}); deepest sink ${(-deepest.d).toFixed(2)} m (${deepest.id})`);
 }
@@ -68,9 +73,9 @@ console.log('1. contact: nothing floats');
 // ---------------------------------------------------------------------------
 // Solids (circles) shared by checks 2-4
 // ---------------------------------------------------------------------------
-const trees = P.treePlacements();
-const rocks = P.rockPlacements().filter((r) => r.collider);
-const logs = P.deadwoodPlacements().filter((d) => d.collider);
+const trees = [...P.treePlacements(), ...MP.mountainTrees()];
+const rocks = [...P.rockPlacements(), ...MP.mountainRocks()].filter((r) => r.collider);
+const logs = [...P.deadwoodPlacements(), ...MP.mountainDeadwood()].filter((d) => d.collider);
 /** @type {{x:number,z:number,r:number,kind:string}[]} */
 const circles = [];
 trees.forEach((t) => circles.push({ x: t.x, z: t.z, r: t.colliderRadius, kind: 'tree' }));
@@ -79,19 +84,41 @@ for (const d of logs) {
   // Log axis = local X rotated by yaw: world direction (cos yaw, -sin yaw).
   for (let k = -2; k <= 2; k++) circles.push({ x: d.x + Math.cos(d.yaw) * k * (d.length / 4), z: d.z - Math.sin(d.yaw) * k * (d.length / 4), r: 0.36 * d.scale, kind: 'log' });
 }
-for (let k = -2; k <= 2; k++) circles.push({ x: L.FALLEN_GIANT.x + Math.cos(L.FALLEN_GIANT.yaw) * k * (L.FALLEN_GIANT.length / 4), z: L.FALLEN_GIANT.z - Math.sin(L.FALLEN_GIANT.yaw) * k * (L.FALLEN_GIANT.length / 4), r: 0.9, kind: 'fallen-giant' });
-L.PILLARS.forEach((p) => circles.push({ x: p.x, z: p.z, r: 0.62, kind: 'pillar' }));
+for (let k = -2; k <= 2; k++) circles.push({ x: L.FALLEN_GIANT.x + Math.cos(L.FALLEN_GIANT.yaw) * k * (L.FALLEN_GIANT.length / 4), z: L.FALLEN_GIANT.z - Math.sin(L.FALLEN_GIANT.yaw) * k * (L.FALLEN_GIANT.length / 4), r: L.FALLEN_GIANT.radius, kind: 'fallen-giant' });
+L.PILLARS.forEach((p) => circles.push({ x: p.x, z: p.z, r: L.PILLAR_R, kind: 'pillar' }));
 circles.push({ x: L.ALTAR[0], z: L.ALTAR[1], r: 1.35, kind: 'altar' });
-circles.push({ x: L.SPIRE.x, z: L.SPIRE.z, r: 2.5, kind: 'spire' });
+circles.push({ x: L.SPIRE.x, z: L.SPIRE.z, r: L.SPIRE.r * 0.93, kind: 'spire' });
 {
   // Root arch far leg (the trail passes under the bridge).
-  const lx = -2.5;
-  circles.push({ x: L.ROOT_ARCH.x + lx * Math.cos(L.ROOT_ARCH.yaw), z: L.ROOT_ARCH.z - lx * Math.sin(L.ROOT_ARCH.yaw), r: 0.5, kind: 'arch-leg' });
+  const lx = L.ROOT_ARCH.legX;
+  circles.push({ x: L.ROOT_ARCH.x + lx * Math.cos(L.ROOT_ARCH.yaw), z: L.ROOT_ARCH.z - lx * Math.sin(L.ROOT_ARCH.yaw), r: 0.5 * L.ROOT_ARCH.scale, kind: 'arch-leg' });
 }
 /** Temple: axis-aligned boxes (local frame == world offsets; temple is not rotated). */
 const boxes = [
   { x: L.TEMPLE.x, z: L.TEMPLE.z, w: L.TEMPLE.width, d: L.TEMPLE.depth, kind: 'temple-platform' },
 ];
+
+// The jungle keeps out of L.MOUNTAIN_GATE_TREES; that list must be where the mountain's gate giants really are.
+MP.mountainTrees().slice(0, 2).forEach((g, i) => {
+  const m = L.MOUNTAIN_GATE_TREES[i];
+  if (!m || Math.hypot(g.x - m.x, g.z - m.z) > 0.6) err(`mountain gate giant ${i} stands at (${g.x.toFixed(1)}, ${g.z.toFixed(1)}) but layout.MOUNTAIN_GATE_TREES says (${m?.x}, ${m?.z})`);
+});
+/** Structures must not interpenetrate each other (the old flicker: spire/temple and pillar/temple shared volume). */
+{
+  const nearBox = (cx, cz, r, b) => {
+    const dx = Math.max(Math.abs(cx - b.x) - b.w / 2, 0);
+    const dz = Math.max(Math.abs(cz - b.z) - b.d / 2, 0);
+    return Math.hypot(dx, dz) - r;
+  };
+  const sp = nearBox(L.SPIRE.x, L.SPIRE.z, L.SPIRE.r, boxes[0]);
+  if (sp < 1.0) err(`spire base is only ${sp.toFixed(2)} m from the temple platform (structures interpenetrate)`);
+  for (const p of L.PILLARS) {
+    // pillars may stand ON the temple (inside the footprint) or clear of it, never straddle the edge
+    const inside = Math.abs(p.x - boxes[0].x) < boxes[0].w / 2 - L.PILLAR_R && Math.abs(p.z - boxes[0].z) < boxes[0].d / 2 - L.PILLAR_R;
+    const clear = nearBox(p.x, p.z, L.PILLAR_R, boxes[0]) > 0.05;
+    if (!inside && !clear) err(`pillar at (${p.x.toFixed(1)}, ${p.z.toFixed(1)}) straddles the temple platform edge`);
+  }
+}
 
 const inBox = (x, z, pad) => boxes.some((b) => Math.abs(x - b.x) < b.w / 2 + pad && Math.abs(z - b.z) < b.d / 2 + pad);
 const circleHit = (x, z, pad) => circles.find((c) => Math.hypot(c.x - x, c.z - z) < c.r + pad);
@@ -281,6 +308,237 @@ console.log('6. areas: identity and landmarks');
   const missing = landmarks.filter((l) => !have.has(l));
   if (missing.length) err(`missing landmark nodes: ${missing.join(', ')}`);
   else ok(`landmarks present: ${landmarks.join(', ')}`);
+}
+
+
+// ---------------------------------------------------------------------------
+// 7. THE MOUNTAIN EXPEDITION (Prompt 04)
+// ---------------------------------------------------------------------------
+console.log('7. mountain: route, edges, reachability (intact + collapsed), bridge, collapse debris, viewpoints');
+{
+  const R = L.MTN;
+  const PRM = 0.5; // the locomotion capsule radius
+  const STEP = 0.45;
+  const CELLM = 0.5;
+  const mtree = MP.mountainTrees().filter((t) => t.x < 30 || M.routeNear(R, t.x, t.z).dist < 20);
+  const mcircles = [
+    ...mtree.map((t) => ({ x: t.x, z: t.z, r: t.colliderRadius })),
+    ...MP.mountainRocks().filter((r) => r.collider).map((r) => ({ x: r.x, z: r.z, r: r.scale * 0.95 })),
+    ...MP.mountainDeadwood().filter((d) => d.collider).flatMap((d) => [-2, -1, 0, 1, 2].map((k) => ({ x: d.x + Math.cos(d.yaw) * k * (d.length / 4), z: d.z - Math.sin(d.yaw) * k * (d.length / 4), r: 0.36 * d.scale }))),
+  ];
+  const bucket = new Map();
+  const put = (map, k, v) => (map.get(k) ?? map.set(k, []).get(k)).push(v);
+  const bk = (x, z) => `${Math.floor(x / 4)},${Math.floor(z / 4)}`;
+  mcircles.forEach((c) => { for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) put(bucket, `${Math.floor(c.x / 4) + i},${Math.floor(c.z / 4) + j}`, c); });
+  const wallB = new Map();
+  for (const w of L.MTN_GUARDS) for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) put(wallB, `${Math.floor(w.x / 4) + i},${Math.floor(w.z / 4) + j}`, w);
+  const blocked = (x, z, h) => {
+    // the bridge's rail walls (kinematic collider) also fence the abutments: x in [ax-1.8, bx+1.8], 0.71 .. 1.35 m from the axis
+    if (x >= M.BRIDGE.ax - 1.8 && x <= M.BRIDGE.bx + 1.8) { const dz = Math.abs(z - M.BRIDGE.az); if (dz >= 0.71 && dz <= 1.35 && h > M.BRIDGE.y - 1.2) return true; }
+    for (const c of bucket.get(bk(x, z)) ?? []) if (Math.hypot(c.x - x, c.z - z) < c.r + PRM) return true;
+    for (const w of wallB.get(bk(x, z)) ?? []) {
+      if (h < w.y0 - 0.2 || h > w.y1) continue;
+      const dx = x - w.x, dz = z - w.z;
+      const lx = dx * Math.cos(w.yaw) - dz * Math.sin(w.yaw);
+      const lz = dx * Math.sin(w.yaw) + dz * Math.cos(w.yaw);
+      if (Math.abs(lx) < w.length / 2 + PRM * 0.2 && Math.abs(lz) < M.GUARD_THICK / 2 + PRM) return true;
+    }
+    return false;
+  };
+  const HALF = M.BRIDGE.halfWidth;
+  const grounds = (x, z, collapsed) => {
+    const g = [{ h: L.terrainHeight(x, z), src: 'terrain' }];
+    const hit = M.routeNear(R, x, z);
+    if (!collapsed && hit.s >= R.cleft.s0 - 0.4 && hit.s <= R.cleft.s1 + 0.4 && hit.l >= -9 && Math.abs(hit.dist) < 4) {
+      // signed l in valley-positive terms
+      const f = C.frameAt(hit.s);
+      const lv = (x - f.x) * f.nx * f.valley + (z - f.z) * f.nz * f.valley;
+      if (lv >= C.SHELF.rideMin && lv <= C.SHELF.rideEdge) g.push({ h: C.shelfTopY(hit.s, lv) - 0.015, src: 'shelf' });
+    }
+    if (x >= M.BRIDGE.ax - 1.8 && x <= M.BRIDGE.bx + 1.8 && Math.abs(z - M.BRIDGE.az) <= 0.75) {
+      const u = Math.min(1, Math.max(0, (x - M.BRIDGE.ax) / M.BRIDGE_LENGTH));
+      g.push({ h: M.bridgeDeckY(u), src: 'deck' });
+    }
+    return g;
+  };
+  const flood = (collapsed) => {
+    const key = (i, j, k) => `${i},${j},${k}`;
+    const seen = new Map();
+    const start = R.samples.find((q) => q.x >= 26);
+    const i0 = Math.round(start.x / CELLM), j0 = Math.round(start.z / CELLM);
+    const q = [[i0, j0, L.terrainHeight(i0 * CELLM, j0 * CELLM), 'terrain']];
+    seen.set(key(i0, j0, 0), 0);
+    const drops = [];
+    const nodes = [];
+    for (let h = 0; h < q.length; h++) {
+      const [i, j, ch, src] = q[h];
+      nodes.push([i * CELLM, j * CELLM, ch, src]);
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ni = i + di, nj = j + dj, nx = ni * CELLM, nz = nj * CELLM;
+        if (nx < 24) continue; // the jungle side: checked by sections 1-6
+        const gs = grounds(nx, nz, collapsed);
+        let taken = false, lowest = -Infinity;
+        for (const g of gs) {
+          if (g.h <= ch + STEP && g.h >= ch - STEP && Math.abs(g.h - ch) / CELLM <= 0.8) {
+            if (blocked(nx, nz, g.h)) { taken = true; continue; } // a wall or trunk: a block, not a drop
+            if (g.src === 'deck' && Math.abs(nz - M.BRIDGE.az) > 0.71) { taken = true; continue; }
+            const k = key(ni, nj, g.src === 'terrain' ? 0 : g.src === 'shelf' ? 1 : 2);
+            if (!seen.has(k)) { seen.set(k, 1); q.push([ni, nj, g.h, g.src]); }
+            taken = true;
+          } else if (g.h < ch - STEP) lowest = Math.max(lowest, g.h);
+        }
+        if (!taken && lowest > -Infinity && ch - lowest > 1.0 && !blocked(nx, nz, ch)) drops.push(`(${nx.toFixed(1)}, ${nz.toFixed(1)}) ${(ch - lowest).toFixed(1)} m below (${(i * CELLM).toFixed(1)}, ${(j * CELLM).toFixed(1)})`);
+      }
+      if (q.length > 400000) break;
+    }
+    return { nodes, drops };
+  };
+  const reachNear = (nodes, x, z, y, tol = 1.2) => nodes.some(([nx, nz, nh]) => Math.hypot(nx - x, nz - z) <= tol && Math.abs(nh - y) < 1.2);
+
+  // route grades + corridor slope
+  {
+    let worst = { g: 0, s: 0 };
+    let prev = R.samples[0];
+    for (const q of R.samples) {
+      if (q.zone === 'bridge') { prev = q; continue; }
+      const d = Math.hypot(q.x - prev.x, q.z - prev.z);
+      if (d > 0.5) { const g = Math.abs(q.y - prev.y) / d; if (g > worst.g) worst = { g, s: q.s }; prev = q; }
+    }
+    if (worst.g > 0.5) err(`mountain route grade ${worst.g.toFixed(2)} at s=${worst.s.toFixed(0)} exceeds 0.50`);
+    else ok(`route ${R.length.toFixed(0)} m, steepest grade ${worst.g.toFixed(2)} (${(Math.atan(worst.g) * 57.3).toFixed(0)} deg) at s=${worst.s.toFixed(0)}; climb ${M.SUMMIT.y.toFixed(0)} m to the summit`);
+    let maxSlope = 0, at = '';
+    for (const q of R.samples) {
+      if (q.zone === 'bridge') continue;
+      const sl = L.terrainSlope(q.x, q.z, 0.5);
+      if (sl > maxSlope) { maxSlope = sl; at = `s=${q.s.toFixed(0)} (${q.zone})`; }
+    }
+    if (maxSlope > 0.75) err(`ground slope ${maxSlope.toFixed(2)} on the route at ${at} (> 0.75)`);
+    else ok(`steepest ground under the route ${maxSlope.toFixed(2)} (${(Math.atan(maxSlope) * 57.3).toFixed(0)} deg) at ${at}`);
+  }
+  // reachability, both states + edge safety
+  for (const collapsed of [false, true]) {
+    const label = collapsed ? 'after the collapse' : 'before the collapse';
+    const { nodes, drops } = flood(collapsed);
+    const vp = L.MTN_VIEWS;
+    const targets = [
+      ['summit platform centre', M.PLATFORM.x, M.PLATFORM.z, M.PLATFORM.y],
+      ['summit lip viewpoint', vp.summit.x, vp.summit.z, vp.summit.y],
+      ['steep descent (gully)', vp.descent.x, vp.descent.z, vp.descent.y],
+      ['cliff ledge', vp.ledge.x, vp.ledge.z, vp.ledge.y],
+      ['before the cleft', vp.cleft.x, vp.cleft.z, vp.cleft.y],
+      ['past the cleft', C.worldAt(R.cleft.s1 + 3, 0).x, C.worldAt(R.cleft.s1 + 3, 0).z, C.frameAt(R.cleft.s1 + 3).y],
+      ['bridge west end', M.BRIDGE.ax - 2.4, M.BRIDGE.az, M.BRIDGE.y],
+      ['bridge mid-span', (M.BRIDGE.ax + M.BRIDGE.bx) / 2, M.BRIDGE.az, M.bridgeDeckY(0.5)],
+      ['bridge east end', M.BRIDGE.bx + 1.2, M.BRIDGE.bz, M.BRIDGE.y],
+      ['brink terrace', M.TERRACE.x - 1.5, M.TERRACE.z + 1.5, M.TERRACE.y],
+    ];
+    let reached = 0;
+    for (const [nx, nz] of nodes) { const hh = M.routeNear(R, nx, nz); if (hh.dist < 1.5 && hh.s > reached) reached = hh.s; }
+    if (reached < R.length - 6) {
+      const nxt = R.samples.find((q) => q.s > reached + 0.5);
+      const why = nxt ? ['trees/rocks', 'walls'].map((k) => k).join('/') : '';
+      const circ = nxt && (bucket.get(bk(nxt.x, nxt.z)) ?? []).find((c) => Math.hypot(c.x - nxt.x, c.z - nxt.z) < c.r + PRM);
+      const wl = nxt && (wallB.get(bk(nxt.x, nxt.z)) ?? []).length;
+      err(`${label}: the flood fill along the route stops at s=${reached.toFixed(1)} of ${R.length.toFixed(0)} (next point ${nxt ? `(${nxt.x.toFixed(1)}, ${nxt.z.toFixed(1)}, ${nxt.zone}) ${circ ? 'blocked by a trunk/rock at (' + circ.x.toFixed(1) + ',' + circ.z.toFixed(1) + ' r' + circ.r.toFixed(1) + ')' : `walls nearby ${wl}, ground ${L.terrainHeight(nxt.x, nxt.z).toFixed(2)} vs route ${nxt.y.toFixed(2)}`}` : ''}) ${why}`);
+    }
+    let allOk = true;
+    for (const [name, x, z, y] of targets) {
+      if (!reachNear(nodes, x, z, y)) { err(`${name} is NOT reachable ${label} at (${x.toFixed(1)}, ${z.toFixed(1)}, y ${y.toFixed(1)})`); allOk = false; }
+    }
+    if (allOk) ok(`${label}: all ${targets.length} stations reachable on foot (${nodes.length} walkable cells, capsule 0.5 m, step 0.45 m)`);
+    if (drops.length) { err(`${label}: ${drops.length} unguarded drop-off(s) the player could walk off, e.g. ${drops.slice(0, 3).join('; ')}`); }
+    else ok(`${label}: no unguarded drop-off: every free neighbour of every reachable cell is walkable or walled`);
+    // lip clearance at the two platforms (can the player approach the edge, but not step over it?)
+    for (const [name, cx, cz, py, r] of [['summit', M.PLATFORM.x, M.PLATFORM.z, M.PLATFORM.y, M.PLATFORM.r], ['terrace', M.TERRACE.x, M.TERRACE.z, M.TERRACE.y, M.TERRACE.r]]) {
+      let best = Infinity;
+      for (const [x, z, h] of nodes) {
+        if (Math.hypot(x - cx, z - cz) > r + 1 || Math.abs(h - py) > 0.6) continue;
+        const a = Math.atan2(z - cz, x - cx);
+        for (let d = 0; d < 6; d += 0.1) {
+          const gx = x + Math.cos(a) * d, gz = z + Math.sin(a) * d;
+          if (L.terrainHeight(gx, gz) < py - 3) { best = Math.min(best, d); break; }
+        }
+      }
+      if (!collapsed) {
+        if (best === Infinity) warn(`${name}: no drop found near the platform edge`);
+        else if (best > 2.6) warn(`${name}: closest approach to the drop is ${best.toFixed(1)} m (the guard ring is too far in to look over naturally)`);
+        else ok(`${name}: the player can get within ${best.toFixed(1)} m of the drop and cannot step off`);
+      }
+    }
+  }
+  // bridge
+  {
+    const gorge = M.riverBedY(M.D_BRINK + 30);
+    const depth = M.BRIDGE.y - L.terrainHeight((M.BRIDGE.ax + M.BRIDGE.bx) / 2, M.BRIDGE.az);
+    const ends = [L.terrainHeight(M.BRIDGE.ax - 1, M.BRIDGE.az), L.terrainHeight(M.BRIDGE.bx + 1, M.BRIDGE.bz)];
+    if (depth < 15) err(`the ravine under the bridge is only ${depth.toFixed(1)} m deep`);
+    else ok(`bridge ${M.BRIDGE_LENGTH.toFixed(1)} m long, deck ${M.BRIDGE.y.toFixed(1)} m (sag ${M.BRIDGE.sag} m), ${depth.toFixed(1)} m above the river bed`);
+    if (Math.abs(ends[0] - M.BRIDGE.y) > 0.5 || Math.abs(ends[1] - M.BRIDGE.y) > 0.5) err(`the ground at the bridge ends (${ends[0].toFixed(2)}, ${ends[1].toFixed(2)}) does not meet the deck at ${M.BRIDGE.y}`);
+    else ok(`both abutments meet the deck within 0.5 m (${ends.map((e) => e.toFixed(2)).join(', ')})`);
+    void gorge;
+  }
+  // waterfall dimensions
+  {
+    const fall = M.riverBedY(M.D_BRINK) - M.BASIN_Y;
+    const cascade = M.riverBedY(128) - M.riverBedY(104);
+    const summitDepth = M.PLATFORM.y - M.GEO.floor;
+    ok(`vertical scale: summit ${summitDepth.toFixed(0)} m above the valley floor; giant fall ${fall.toFixed(0)} m; cascade above the bridge ${cascade.toFixed(0)} m; bridge ${depthOf()} m above the river`);
+    function depthOf() { return (M.BRIDGE.y - L.terrainHeight((M.BRIDGE.ax + M.BRIDGE.bx) / 2, M.BRIDGE.az)).toFixed(0); }
+    if (fall < 45) err(`the waterfall is only ${fall.toFixed(0)} m high`);
+  }
+  // collapse: sink envelope, speeds, debris
+  {
+    const depth = M.CLEFT.depth;
+    const peak = (1.5 * C.SHELF.sinkDepth) / C.SHELF.sinkTime;
+    let buried = true, worst = Infinity;
+    for (let s = R.cleft.s0; s <= R.cleft.s1; s += 0.25) {
+      for (let l = C.SHELF.rideMin; l <= C.SHELF.rideEdge; l += 0.3) {
+        const w = C.worldAt(s, l);
+        const sunk = C.shelfTopY(s, l) - C.SHELF.sinkDepth;
+        const margin = L.terrainHeight(w.x, w.z) - sunk;
+        worst = Math.min(worst, margin);
+        if (margin < 0) buried = false;
+      }
+    }
+    if (!buried) err(`after sinking, part of the shelf is still above the ground (worst margin ${worst.toFixed(2)} m)`);
+    else ok(`the sunk shelf ends below the hollow everywhere (margin >= ${worst.toFixed(2)} m); hollow ${depth} m deep; peak sink speed ${peak.toFixed(2)} m/s over ${C.SHELF.sinkTime} s`);
+    if (peak > 2.4) err(`peak sink speed ${peak.toFixed(2)} m/s is too fast for a comfortable carry`);
+    let bad = 0;
+    const lips = C.lipFlights();
+    for (const p of lips) {
+      const e = C.endpoint(p.frames);
+      const hit = M.routeNear(R, e.x, e.z);
+      if (C.onRoute(e.x, e.z, e.y, 1.5)) { bad++; err(`lip piece ${p.row} lands on the route at (${e.x.toFixed(1)}, ${e.y.toFixed(1)}, ${e.z.toFixed(1)})`); }
+      if (e.y > hit.y - 8 && hit.dist < 40) { bad++; err(`lip piece ${p.row} comes to rest only ${(hit.y - e.y).toFixed(1)} m below the ledge (should fall into the valley)`); }
+    }
+    let pebOnRoute = 0, pebTotal = 0, pebFall = 0;
+    for (const pb of C.pebbleFlights()) {
+      const e = C.endpoint(pb.frames);
+      pebTotal++;
+      const hit = M.routeNear(R, e.x, e.z);
+      if (e.y < hit.y - 8) pebFall++;
+      if (C.onRoute(e.x, e.z, e.y, 0.2) && hit.s > R.cleft.s1 + 1) pebOnRoute++;
+    }
+    if (pebOnRoute) err(`${pebOnRoute} pebble(s) come to rest on the route beyond the shelf`);
+    if (!bad && !pebOnRoute) ok(`debris: ${lips.length} lip pieces and ${pebFall}/${pebTotal} pebbles end in the valley (>= 8 m below the ledge); none on the route`);
+    const tr = C.worldAt(R.cleft.sMid, 0);
+    void tr;
+  }
+  // trigger/reset logic as pure state tests
+  {
+    const E = C.EVENT;
+    if (!(E.crackFrom > E.crackFull && E.crackFull > E.tremorFrom - 0.5 && E.pebblesFrom > E.tremorFrom && E.cancelBeyond > E.crackFrom && E.resetDistance > E.cancelBeyond && E.resetHardDistance > E.resetDistance)) err('collapse trigger distances are not ordered (crack > pebbles > tremor, cancel > crack, reset > cancel)');
+    else ok(`collapse stages: cracks from ${E.crackFrom} m, pebbles from ${E.pebblesFrom} m, tremor from ${E.tremorFrom} m, break ${E.tremorToBreak} s later (or ${E.minTremor} s after stepping on); cancel beyond ${E.cancelBeyond} m; re-arm beyond ${E.resetDistance} m out of sight (${E.resetHardDistance} m always)`);
+  }
+  // viewpoints stand on valid ground
+  {
+    let bad = 0;
+    for (const [id, v] of Object.entries(L.MTN_VIEWS)) {
+      const g = id.startsWith('bridge') ? M.bridgeDeckY(Math.min(1, Math.max(0, (v.x - M.BRIDGE.ax) / M.BRIDGE_LENGTH))) : L.terrainHeight(v.x, v.z);
+      if (Math.abs(g - v.y) > 0.7) { bad++; err(`viewpoint ${id}: feet at y ${v.y.toFixed(2)} but the ground is ${g.toFixed(2)}`); }
+    }
+    if (!bad) ok(`${Object.keys(L.MTN_VIEWS).length} viewpoints (summit, descent, cleft, bridge, brink ...) stand on the ground or deck`);
+  }
 }
 
 console.log(`\n${errors ? 'FAILED' : 'PASSED'}: ${errors} error(s), ${warnings} warning(s)`);

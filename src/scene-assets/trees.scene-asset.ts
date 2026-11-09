@@ -8,7 +8,7 @@
  * 'hi' (near the trail) and 'lo' (distant wall) detail. Variants differ in
  * buttress count, lean, branching height and crown shape, not just size.
  */
-import { BufferGeometry, Color, Float32BufferAttribute, Mesh, Vector3 } from '@iwsdk/core';
+import { BufferGeometry, CatmullRomCurve3, Color, Float32BufferAttribute, Mesh, Vector3 } from '@iwsdk/core';
 import { ENTRANCE_TREES, ROOT_ARCH, fbm, makeRandom, smoothstep, terrainHeight } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import type { TreeKind } from '../world/placements.js';
@@ -31,7 +31,20 @@ export interface TreeSpec {
   tone: number; // 0 = deep green .. 1 = yellower
 }
 
-export const TREE_SPECS: Record<TreeKind, TreeSpec[]> = {
+/**
+ * Real-world references (tropical lowland rainforest): emergent giants 50-75 m with 2-4 m trunks above the buttresses, the canopy layer 30-45 m,
+ * sub-canopy 20-30 m. The authored specs below were a size too small (giants 34-42 m, canopy 24-30 m), which made the forest read as a grove.
+ * Heights, trunk radius, crown and liana length are baked up by these factors; proportions (taper, branch height fraction, buttress flare) are kept.
+ */
+const GROWTH: Record<TreeKind, { h: number; r: number; c: number }> = {
+  giant: { h: 1.6, r: 1.3, c: 1.3 },
+  tall: { h: 1.32, r: 1.15, c: 1.2 },
+  broad: { h: 1.3, r: 1.15, c: 1.2 },
+  slender: { h: 1.28, r: 1.1, c: 1.15 },
+};
+const grown = (kind: TreeKind, specs: TreeSpec[]): TreeSpec[] => specs.map((sp) => ({ ...sp, height: sp.height * GROWTH[kind].h, radius: sp.radius * GROWTH[kind].r, crown: sp.crown * GROWTH[kind].c, lean: sp.lean * GROWTH[kind].h, hanging: sp.hanging }));
+
+const AUTHORED: Record<TreeKind, TreeSpec[]> = {
   giant: [
     { seed: 101, height: 38, radius: 1.55, lobes: 5, flare: 0.72, branchStart: 0.5, limbs: 7, crown: 7.5, lean: 0.9, vines: 3, hanging: 9, tone: 0.2 },
     { seed: 202, height: 42, radius: 1.8, lobes: 6, flare: 0.8, branchStart: 0.55, limbs: 8, crown: 8.5, lean: -1.2, vines: 3, hanging: 10, tone: 0.45 },
@@ -51,6 +64,91 @@ export const TREE_SPECS: Record<TreeKind, TreeSpec[]> = {
     { seed: 622, height: 19, radius: 0.55, lobes: 3, flare: 0.28, branchStart: 0.55, limbs: 4, crown: 3.4, lean: 0.7, vines: 1, hanging: 2, tone: 0.3 },
   ],
 };
+
+/** The species table the runtime uses (grown to real-world proportions, see GROWTH). */
+export const TREE_SPECS: Record<TreeKind, TreeSpec[]> = { giant: grown('giant', AUTHORED.giant), tall: grown('tall', AUTHORED.tall), broad: grown('broad', AUTHORED.broad), slender: grown('slender', AUTHORED.slender) };
+
+
+// ---------------------------------------------------------------------------
+// Perch boughs: the branches wildlife sits on
+// ---------------------------------------------------------------------------
+
+/**
+ * Two bare, near-horizontal boughs per tree kind (slender: two as well) at 3-10 m (the lowest, at 3-4 m, is where an animal can be seen at close range without craning the neck). They are defined per KIND with absolute metres,
+ * measured from the trunk's axis, and are part of BOTH the detailed and the cheap tree version: the distant forest uses one cheap model per kind
+ * (`tree-<kind>-lo`), so a bough that depended on the variant would move at the LOD switch and an animal sitting on it would float.
+ * `ang` is the bough's direction (rad, tree-local), `len` its length from the axis, `rise` the lift of its tip as a fraction of `len`.
+ */
+export interface PerchBough {
+  h: number;
+  ang: number;
+  len: number;
+  rise: number;
+  r0: number;
+}
+export const PERCH_BOUGHS: Record<TreeKind, PerchBough[]> = {
+  giant: [
+    { h: 4.2, ang: 5.2, len: 8.0, rise: 0.08, r0: 0.3 },
+    { h: 9.5, ang: 0.6, len: 9.0, rise: 0.1, r0: 0.34 },
+  ],
+  tall: [
+    { h: 3.8, ang: 3.3, len: 6.0, rise: 0.08, r0: 0.25 },
+    { h: 8.0, ang: 1.9, len: 6.8, rise: 0.1, r0: 0.3 },
+  ],
+  broad: [
+    { h: 3.4, ang: 5.4, len: 5.6, rise: 0.08, r0: 0.24 },
+    { h: 7.0, ang: 0.4, len: 6.4, rise: 0.09, r0: 0.3 },
+  ],
+  slender: [
+    { h: 3.2, ang: 0.2, len: 4.2, rise: 0.08, r0: 0.18 },
+    { h: 6.5, ang: 2.2, len: 4.6, rise: 0.1, r0: 0.2 },
+  ],
+};
+
+/** The bough's centreline control points (tree-local, metres): trunk axis -> tip. */
+function boughPoints(b: PerchBough): Vector3[] {
+  const dir = new Vector3(Math.cos(b.ang), 0, Math.sin(b.ang));
+  const start = new Vector3(0, b.h, 0);
+  const mid = start.clone().addScaledVector(dir, b.len * 0.5).add(new Vector3(0, b.len * b.rise * 0.7, 0));
+  const end = start.clone().addScaledVector(dir, b.len).add(new Vector3(0, b.len * b.rise, 0));
+  const q = start.clone().lerp(mid, 0.5).add(new Vector3(0, b.len * 0.04, 0));
+  return [start, q, mid, end];
+}
+const boughRadius = (b: PerchBough) => (t: number) => b.r0 * (1 - 0.7 * t);
+
+/** A place an animal can sit, in the tree's local frame (before the placement's yaw/scale): the top of the bough at fraction `t` of its length. */
+export interface PerchLocal {
+  x: number;
+  y: number;
+  z: number;
+  /** Bough direction (unit, horizontal) and the branch radius there (m). */
+  dx: number;
+  dz: number;
+  r: number;
+  /** 0..1 along the bough (1 = tip). */
+  t: number;
+  bough: number;
+}
+const perchCache = new Map<TreeKind, PerchLocal[]>();
+export function treePerches(kind: TreeKind): PerchLocal[] {
+  let out = perchCache.get(kind);
+  if (out) return out;
+  out = [];
+  PERCH_BOUGHS[kind].forEach((b, bi) => {
+    const curve = new CatmullRomCurve3(boughPoints(b), false, 'catmullrom', 0.5);
+    const rad = boughRadius(b);
+    const p = new Vector3();
+    for (const t of [0.52, 0.68, 0.84, 0.97]) {
+      curve.getPointAt(t, p);
+      const tan = curve.getTangentAt(t);
+      const h = Math.hypot(tan.x, tan.z) || 1;
+      // the tube is a 4-5 sided prism: its top face sits a little below the ideal circle, so the perch is 14 % of the radius lower than the circle's top (the cheap versions use 4 sides, which sag the most)
+      out!.push({ x: p.x, y: p.y + rad(t) * 0.86, z: p.z, dx: tan.x / h, dz: tan.z / h, r: rad(t), t, bough: bi });
+    }
+  });
+  perchCache.set(kind, out);
+  return out;
+}
 
 export type TreeLod = 'hi' | 'lo';
 
@@ -84,6 +182,16 @@ function trunkRadiusAt(spec: TreeSpec, y: number, theta: number): number {
   r *= 1 + (spec.flare * lobe + 0.25) * flareFall;
   r *= 1 + 0.055 * (barkGroove(spec, theta, y) - 0.5) * 2;
   return r;
+}
+
+/** Trunk axis (tree-local x, z) and an angle-averaged radius at height `y` for a tree variant: where a climbing animal grips the trunk. */
+export function trunkAxisAt(kind: TreeKind, variant: number, y: number): { x: number; z: number; r: number } {
+  const spec = TREE_SPECS[kind][variant % TREE_SPECS[kind].length];
+  const c = trunkCenter(spec, y, new Vector3());
+  const t = Math.min(1, Math.max(0, y / spec.height));
+  const flareFall = Math.exp(-Math.max(0, y) / (1.4 + spec.height * 0.045));
+  const r = spec.radius * (1.12 - 0.45 * t) * (1 + (spec.flare * 0.3 + 0.25) * flareFall);
+  return { x: c.x, z: c.z, r };
 }
 
 /** Largest ground-level radius of a tree (m): the real footprint, used for colliders and spacing. */
@@ -246,6 +354,21 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
       }
     }
   }
+  // Perch boughs (see PERCH_BOUGHS): identical in both detail levels.
+  // A leafy tuft beyond each bough's tip so the boughs do not read as bare sticks.
+  const boughLeaf = crownColor(spec.tone, spec.seed + 5);
+  for (const bh of PERCH_BOUGHS[kind]) {
+    const pts = boughPoints(bh);
+    parts.push({ geo: solidUV(tubeAlong(pts, boughRadius(bh), 4, lod === 'hi' ? 4 : 3)), color: bark });
+    // Tufts never cover the perching spots (t 0.5-0.97 along the top of the bough): one starts just beyond the tip.
+    const tuft = (at: Vector3, size: number, yaw: number, tilt: number) => {
+      const m = mat(at.x, at.y, at.z, -Math.PI / 2 + tilt, yaw, 0).multiply(mat(0, -size / 2, 0));
+      parts.push({ geo: crownCard(size), m, normalFn: softNormals(new Vector3(0, bh.h - 2.5, 0), 0.5), color: (p) => boughLeaf(p, 0.55).multiplyScalar(0.92) });
+    };
+    const dirv = new Vector3(Math.cos(bh.ang), 0, Math.sin(bh.ang));
+    const sz = 1.9 + bh.len * 0.08;
+    tuft(pts[3].clone().addScaledVector(dirv, sz * 0.55).add(new Vector3(0, -0.1, 0)), sz, bh.ang * 3, 0.08);
+  }
   // The leading shoot crowns the trunk.
   trunkCenter(spec, spec.height * 0.97, c);
   crowns.push({ p: c.clone(), r: spec.crown * 0.6 });
@@ -289,6 +412,23 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
 // ---------------------------------------------------------------------------
 
 /**
+ * Centreline of the overhead limb that bridges the two gate trees, and its radius by arc fraction (world coordinates).
+ * The gate trees are 60+ m giants with 4 m trunks: the limb springs from them at 17-19 m (a cathedral roof over the trail, not a low beam).
+ * Shared by the mesh and by the wildlife perches.
+ */
+export function entranceLimbCurve(): { pts: Vector3[]; radius: (t: number) => number } {
+  const [a, b] = ENTRANCE_TREES;
+  const ya = terrainHeight(a[0], a[1]);
+  const yb = terrainHeight(b[0], b[1]);
+  const pa = new Vector3(a[0] + 0.5, ya + 17.0, a[1]);
+  const pb = new Vector3(b[0] - 0.6, yb + 18.6, b[1]);
+  const mid = pa.clone().lerp(pb, 0.5).add(new Vector3(0.3, 1.9, 0.9));
+  const q1 = pa.clone().lerp(mid, 0.5).add(new Vector3(0, 0.5, -0.3));
+  const q3 = mid.clone().lerp(pb, 0.5).add(new Vector3(0, 0.4, 0.4));
+  return { pts: [pa, q1, mid, q3, pb], radius: (t) => 0.62 - 0.2 * Math.sin(Math.PI * t) + 0.04 * Math.sin(t * 40) };
+}
+
+/**
  * One thick limb that bridges the two colossal gate trees overhead, loaded
  * with moss, crown clusters and a fringe of lianas. Built in WORLD coordinates
  * (the node sits at the origin) so it joins the trunks exactly.
@@ -299,16 +439,13 @@ export function createEntranceCanopy(): Mesh {
   const ya = terrainHeight(a[0], a[1]);
   const yb = terrainHeight(b[0], b[1]);
   const parts: Part[] = [];
-  const pa = new Vector3(a[0] + 0.5, ya + 9.0, a[1]);
-  const pb = new Vector3(b[0] - 0.6, yb + 10.4, b[1]);
-  const mid = pa.clone().lerp(pb, 0.5).add(new Vector3(0.3, 1.9, 0.9));
-  const q1 = pa.clone().lerp(mid, 0.5).add(new Vector3(0, 0.5, -0.3));
-  const q3 = mid.clone().lerp(pb, 0.5).add(new Vector3(0, 0.4, 0.4));
+  const { pts: limbPts, radius: limbRadius } = entranceLimbCurve();
+  const [pa, q1, mid, q3, pb] = limbPts;
   const limbColor = barkColor({ ...TREE_SPECS.giant[0], seed: 31 });
-  parts.push({ geo: solidUV(tubeAlong([pa, q1, mid, q3, pb], (t) => 0.62 - 0.2 * Math.sin(Math.PI * t) + 0.04 * Math.sin(t * 40), 8, 22)), color: limbColor });
-  const l0 = new Vector3(a[0] + 1.3, ya + 6.2, a[1] + 0.9);
+  parts.push({ geo: solidUV(tubeAlong(limbPts, limbRadius, 8, 22)), color: limbColor });
+  const l0 = new Vector3(a[0] + 1.3, ya + 13.2, a[1] + 0.9);
   const l1 = pa.clone().lerp(pb, 0.45).add(new Vector3(0, 4.2, 1.6));
-  const l2 = new Vector3(b[0] - 1.4, yb + 6.8, b[1] + 0.9);
+  const l2 = new Vector3(b[0] - 1.4, yb + 13.8, b[1] + 0.9);
   parts.push({ geo: solidUV(tubeAlong([l0, l1, l2], (t) => 0.1 + 0.05 * Math.sin(Math.PI * t), 5, 14)), color: lerpColor('#2f4a22', '#475a2d', 0.4) });
 
   const color = crownColor(0.2, 900);
@@ -330,7 +467,7 @@ export function createEntranceCanopy(): Mesh {
     const at = pa.clone().lerp(pb, t);
     at.y = pa.y + (pb.y - pa.y) * t + 1.9 * Math.sin(Math.PI * t) - 0.1;
     at.z += (rng() - 0.5) * 0.7;
-    const drop = 3 + rng() * 5.4;
+    const drop = 4 + rng() * 9;
     const sway = (rng() - 0.5) * 0.8;
     const pts = [at.clone(), at.clone().add(new Vector3(sway * 0.3, -drop * 0.3, 0)), at.clone().add(new Vector3(sway, -drop * 0.7, (rng() - 0.5) * 0.3)), at.clone().add(new Vector3(sway * 0.8, -drop, 0))];
     const rad = 0.025 + rng() * 0.03;
@@ -377,8 +514,11 @@ export function createRootArch(): Mesh {
     const pts = [new Vector3(x, 2.35, 0.1), new Vector3(x + 0.1, 1.6, 0.15), new Vector3(x - 0.05, 0.9, 0.1), new Vector3(x + 0.05, 0.35, 0.08)];
     parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.03 * (1 - 0.4 * t), 3, 8)), color: lerpColor('#27401c', '#3e5524', rng()) });
   }
-  const mesh = new Mesh(mergeParts(parts), foliageCardMaterial);
+  const geo = mergeParts(parts);
+  geo.scale(ROOT_ARCH.scale, ROOT_ARCH.scale, ROOT_ARCH.scale); // authored 2.75 m high, baked to 4.7 m: a root you walk under, not a hoop
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  const mesh = new Mesh(geo, foliageCardMaterial);
   mesh.name = 'RootArch';
-  void ROOT_ARCH;
   return mesh;
 }

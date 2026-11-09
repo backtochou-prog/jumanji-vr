@@ -21,8 +21,8 @@
     },
     "render": {
       "fov": 75,
-      "near": 0.05,
-      "far": 100
+      "near": 0.1,
+      "far": 260
     },
     "features": {
       "locomotion": {

@@ -17,8 +17,11 @@
     "stats": "node tools/asset-stats.mjs",
     "validate": "node tools/validate-scene.mjs",
     "stats:check": "node tools/asset-stats.mjs --check",
-    "verify": "npm run typecheck && npm run validate && npm run stats:check && npm run build",
-    "perf:probe": "node tools/perf-probe.mjs"
+    "verify": "npm run typecheck && npm run validate && npm run stats:check && npm run wildlife && npm run build",
+    "perf:probe": "node tools/perf-probe.mjs",
+    "audit": "node tools/audit.mjs",
+    "wildlife": "node tools/wildlife-test.mjs",
+    "wildlife:browser": "node tools/wildlife-test.mjs --only none --browser"
   },
   "dependencies": {
     "@iwsdk/core": "1.1.0-rc.2",

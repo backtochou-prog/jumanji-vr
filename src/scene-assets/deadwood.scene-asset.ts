@@ -5,7 +5,7 @@
  * Every piece is partly buried: origins sit so the lowest side is below ground.
  */
 import { BufferGeometry, CircleGeometry, Color, IcosahedronGeometry, Mesh, Vector3 } from '@iwsdk/core';
-import { fbm, makeRandom, smoothstep } from '../world/layout.js';
+import { SCALE, fbm, makeRandom, smoothstep } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import { displace, lerpColor, mat, mergeParts, tubeAlong } from './lib/geo.js';
 import type { ColorFn, Part } from './lib/geo.js';
@@ -104,7 +104,11 @@ export function createGiantLog(): Mesh {
     const d = new Vector3((rng() - 0.5) * 0.4, 0.8, (rng() - 0.5) * 1.2).normalize();
     parts.push({ geo: tubeAlong([s, s.clone().addScaledVector(d, 0.5), s.clone().addScaledVector(d, 1.1)], (t) => 0.12 * (1 - 0.7 * t), 5, 3), color: woodColor(90 + i, 0.2) });
   }
-  const m = new Mesh(mergeParts(parts), barkMaterial);
+  const geo = mergeParts(parts);
+  geo.scale(SCALE.fallenGiant, SCALE.fallenGiant, SCALE.fallenGiant); // 11 m x 1.7 m authored -> 15.4 m x 2.4 m
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  const m = new Mesh(geo, barkMaterial);
   m.name = 'GiantLog';
   return m;
 }
