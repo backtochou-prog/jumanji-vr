@@ -23,6 +23,8 @@ interface Chunk {
   cls: ChunkClass;
   ix: number;
   iz: number;
+  /** For a cheap tree cell: the detailed cell of the same trees (same grid). The cheap one is drawn exactly when the detailed one is not. */
+  twin?: Chunk;
 }
 
 /**
@@ -105,6 +107,10 @@ export class ChunkLodSystem extends createSystem({}) {
       for (const c of o.children) walk(c);
     };
     walk(this.world.scene);
+    // pair every cheap tree cell with its detailed twin (same grid cell): the two are complementary by construction
+    const hi = new Map<string, Chunk>();
+    for (const c of this.chunks) if (c.cls === 'trees-hi') hi.set(`${c.ix},${c.iz}`, c);
+    for (const c of this.chunks) if (c.cls === 'trees-lo') c.twin = hi.get(`${c.ix},${c.iz}`);
     this.collected = this.chunks.length > 0;
   }
 
@@ -137,11 +143,15 @@ export class ChunkLodSystem extends createSystem({}) {
       const show = !low && Math.hypot(this.px - fx, this.pz - fz) < MIST_RANGE;
       if (this.mist.visible !== show) this.mist.visible = show;
     }
-    for (const r of this.ridges) if (r.visible !== open < 0.5) r.visible = open < 0.5;
+    // (landmarks, ridges and far ranges switch with hysteresis too: a bare threshold flashes them while the head sways or the player stands on it)
+    for (const r of this.ridges) {
+      const v = r.visible ? open < 0.55 : open < 0.45;
+      if (r.visible !== v) r.visible = v;
+    }
     for (const t of this.landmarks) {
       const dx = Math.max(t.box.min.x - this.px, 0, this.px - t.box.max.x);
       const dz = Math.max(t.box.min.z - this.pz, 0, this.pz - t.box.max.z);
-      const show = Math.hypot(dx, dz) <= JUNGLE_LANDMARK_CAP;
+      const show = Math.hypot(dx, dz) <= JUNGLE_LANDMARK_CAP + (t.obj.visible ? 6 : -6);
       if (t.obj.visible !== show) t.obj.visible = show;
     }
     for (const t of this.mtnLandmarks) {
@@ -151,7 +161,10 @@ export class ChunkLodSystem extends createSystem({}) {
       const show = t.obj.visible ? d <= mtnCap + 10 : d <= mtnCap;
       if (t.obj.visible !== show) t.obj.visible = show;
     }
-    for (const f of this.far) if (f.visible !== open > 0.25) f.visible = open > 0.25;
+    for (const f of this.far) {
+      const v = f.visible ? open > 0.2 : open > 0.3;
+      if (f.visible !== v) f.visible = v;
+    }
     // Terrain LOD: a detailed 96 m root cell draws its fine tiles near the player and one coarse mesh farther away (collision is unaffected).
     const fineR = low ? TERRAIN_LOD.fineLow : TERRAIN_LOD.fine;
     let nFine = 0;
@@ -175,12 +188,22 @@ export class ChunkLodSystem extends createSystem({}) {
       if (t.obj.visible !== show) t.obj.visible = show;
     }
     let shown = 0;
-    for (const c of this.chunks) {
-      const d = cellDistance(this.px, this.pz, c.ix, c.iz, CELL_SIZE[c.cls]);
-      const mountainCell = CHUNK_ORIGIN.x + c.ix * CELL_SIZE[c.cls] >= 30;
-      const show = chunkVisible(c.cls, d, low, mountainCell ? Math.min(cap, mtnCap) : Math.min(cap, JUNGLE_CELL_CAP), c.obj.visible);
-      if (c.obj.visible !== show) c.obj.visible = show;
-      if (show) shown++;
+    // two passes: every cell except the cheap tree cells first, then the cheap trees (their visibility follows the detailed twin's)
+    for (let pass = 0; pass < 2; pass++) {
+      for (const c of this.chunks) {
+        if ((c.cls === 'trees-lo') !== (pass === 1)) continue;
+        const d = cellDistance(this.px, this.pz, c.ix, c.iz, CELL_SIZE[c.cls]);
+        const mountainCell = CHUNK_ORIGIN.x + c.ix * CELL_SIZE[c.cls] >= 30;
+        const limit = mountainCell ? Math.min(cap, mtnCap) : Math.min(cap, JUNGLE_CELL_CAP);
+        let show: boolean;
+        if (c.twin) {
+          // complementary hand-off: no gap, no double. (With independent hysteresis a cell that starts inside the +-1.5 m band is hidden in BOTH
+          // versions until the player moves out of it: the tree vanishes.) The cheap version is also bounded by the draw cap.
+          show = !c.twin.obj.visible && d <= limit;
+        } else show = chunkVisible(c.cls, d, low, limit, c.obj.visible);
+        if (c.obj.visible !== show) c.obj.visible = show;
+        if (show) shown++;
+      }
     }
     chunkStats.shown = shown;
     chunkStats.total = this.chunks.length;

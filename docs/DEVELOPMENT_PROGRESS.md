@@ -1,5 +1,15 @@
 # Development progress
 
+## Fix — trees and objects flashing / "respawning" (vanishing trees)
+Date: 2026-11-09. Reported on the live site: trees and other objects flash and respawn when walking. **Reproduced and measured first** (`node tools/lod-gaps.mjs`: replays `ChunkLodSystem`'s rules for a player walking the trail with head sway): **13 % of tree-samples along the trail were drawn by neither detail level and 25 of the 88 trees vanished at some point.**
+Root causes (all in the distance LOD, none in the art):
+1. **Mismatched cell grids.** A near tree exists twice: detailed (`trees-hi`, 28 m cells, drawn within 30 m) and cheap (`trees-lo`, **56 m** cells, drawn beyond 30 m). Each cell is judged by the distance to ITS nearest point, so the two cells of one tree disagreed: a tree 30-70 m away inside the player's own large cheap cell was hidden by both. Fix: both classes use the same 28 m grid (`CELL_SIZE`), and the cheap cell is drawn **exactly when its detailed twin is not** (and within the cap), so there is never a gap or a double draw.
+2. **Hysteresis dead-band.** With independent +-1.5 m hysteresis, a cell that starts inside the band is hidden in BOTH versions until the player leaves the band. Fixed by the twin rule above.
+3. **Hysteresis on a minimum of 0.** A hidden cell needed `dist >= 1.5` to reappear, so a cell the player stands inside (after a teleport / start point) stayed invisible. `chunkVisible` no longer applies hysteresis to a zero minimum.
+4. Landmarks (temple, cliff, terrain tiles), jungle ridges and the far ranges switched on bare thresholds each 0.25 s: they flashed when the head swayed at the limit. They now have hysteresis (6 m / open 0.45-0.55 / 0.2-0.3).
+Result: `lod-gaps` high and low tier, walking and hidden-start: **0 vanished trees, 0 double-drawn, 0 flashes**; live in the real page (`node tools/lod-live.mjs`, 29 positions incl. teleports): **0 vanished, 0 double-drawn, 0 page errors**. Cost: the cheap tree cells are now 28 m, so the estimate rose by 3 draws (jungle 93 -> 96, mountain 85 -> 87; budgets still met). `npm run lod` is part of `npm run verify`. Not changed on purpose: plants, ground cover, rocks and deadwood still appear in whole 28 m cells at their ranges (36 / 34 / 46 / 42 m); with fog that is a soft pop, not a flash. Physical Quest 2: not tested.
+
+
 ## Prompt 07 — The living jungle: wildlife, animation and environmental sound (requested as "PROMPT 06")
 Date: 2026-11-09. Goal: nature that exists independently of the player. **Nothing here was run on a physical Quest 2**, and **nobody has listened to the synthesised sounds** (this environment has no audio output; levels were set by calculation and checked numerically). Both are the first things to check on the headset (list at the end).
 

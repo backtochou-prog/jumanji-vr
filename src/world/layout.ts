@@ -556,8 +556,12 @@ export const CHUNK_LOD = {
   crags: { min: 0, max: 760 },
 } as const;
 export type ChunkClass = keyof typeof CHUNK_LOD;
-/** Culling cell size per class (m). */
-export const CELL_SIZE: Record<ChunkClass, number> = { 'trees-hi': CHUNK, 'trees-lo': 56, 'trees-far': 56, plants: CHUNK, ground: CHUNK, rocks: CHUNK, deadwood: CHUNK, canopy: 128, crags: 128 };
+/**
+ * Culling cell size per class (m). `trees-hi` and `trees-lo` MUST be the same grid: a tree is drawn by exactly one of them, decided by the distance to the
+ * nearest point of ITS cell, so with different cell sizes (it used to be 28 and 56 m) the two cells of one tree disagree and the tree is drawn by neither:
+ * it vanishes and 'respawns' as you walk (13 % of tree-samples along the trail; `node tools/lod-gaps.mjs` measures it).
+ */
+export const CELL_SIZE: Record<ChunkClass, number> = { 'trees-hi': CHUNK, 'trees-lo': CHUNK, 'trees-far': 56, plants: CHUNK, ground: CHUNK, rocks: CHUNK, deadwood: CHUNK, canopy: 128, crags: 128 };
 /** Largest distance anything is drawn at, by how open the view is (0 jungle .. 1 mountain top). */
 export const viewCap = (open: number): number => 130 + 900 * open;
 
@@ -593,7 +597,9 @@ export function chunkVisible(cls: ChunkClass, dist: number, low = false, cap = 1
   const min = low ? (CHUNK_LOW_MIN[cls] ?? r.min) : r.min;
   if (was === undefined) return dist <= max && dist >= min;
   const h = LOD_HYSTERESIS;
-  return was ? dist <= max + h && dist >= min - h : dist <= max - h && dist >= min + h;
+  // no hysteresis on a minimum of 0: `dist >= 0 + h` would keep a hidden cell the player is standing in (dist 0) hidden forever
+  const nearOk = min <= 0 ? true : was ? dist >= min - h : dist >= min + h;
+  return nearOk && (was ? dist <= max + h : dist <= max - h);
 }
 
 // ---------------------------------------------------------------------------
