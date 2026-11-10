@@ -38,6 +38,11 @@ export const wctx = {
   /** Wildlife master switch (settings / URL). */
   enabled: true,
   audio: { call: () => {}, hush: () => {} } as CallSink,
+  /**
+   * The opening reveal (IntroSystem <-> Birds). 'off' = no reveal. 'hold' = the random crossing flocks wait. 'cross' = IntroSystem asks for the staged pair of
+   * macaws to fly in front of the waterfall. 'done' = Birds flew it (or gave up) and the normal schedule resumes.
+   */
+  intro: 'off' as 'off' | 'hold' | 'cross' | 'done',
 };
 
 /** Is a sphere (centre x,y,z; radius r) inside the generous view cone? Cheap: one dot product. */

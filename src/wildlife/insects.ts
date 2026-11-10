@@ -176,7 +176,7 @@ export class Insects {
 
     // fireflies: three shaded hollows (the gate, the root arch, the mid trail)
     const hollows: [number, number, number][] = [
-      [SPAWN[0] + 2.5, SPAWN[1] - 15, 14],
+      [3.1, -3.5, 14], // the shaded hollow at the gate (a literal: the start is no longer there)
       [-4.5, -33, 12],
       [3.5, -44, 12],
     ];

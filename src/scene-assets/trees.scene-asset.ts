@@ -9,11 +9,11 @@
  * buttress count, lean, branching height and crown shape, not just size.
  */
 import { BufferGeometry, CatmullRomCurve3, Color, Float32BufferAttribute, Mesh, Vector3 } from '@iwsdk/core';
-import { ENTRANCE_TREES, ROOT_ARCH, fbm, makeRandom, smoothstep, terrainHeight } from '../world/layout.js';
+import { ENTRANCE_LIMB, ENTRANCE_TREES, ROOT_ARCH, fbm, makeRandom, smoothstep, terrainHeight } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import type { TreeKind } from '../world/placements.js';
 import { blobCardGeometry, cardGeometry, lerpColor, mat, mergeParts, softNormals, solidUV, tubeAlong } from './lib/geo.js';
-import type { ColorFn, Part } from './lib/geo.js';
+import type { ColorFn, Part, WindFn } from './lib/geo.js';
 import { foliageCardMaterial } from './lib/materials.js';
 
 export interface TreeSpec {
@@ -155,6 +155,34 @@ export type TreeLod = 'hi' | 'lo';
 /** Crown cards are trimmed to the clump's alpha silhouette (see blobCardGeometry): fewer wasted fragments. */
 const crownCard = (size: number) => blobCardGeometry('clump', size);
 
+// ---------------------------------------------------------------------------
+// Wind weights (see WindWeights in lib/geo.ts and foliageCardMaterial)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whole-tree bend weight at tree-local height `y` (m above the foot) for a tree of height `h`: (y/h)^2 * (h/60), clamped to 0..1.
+ * The shader leans the tree downwind by up to 0.36 m x weight: ~0.3 m at the top of a 50 m crown, a few mm at the perch boughs.
+ * A pure function of the position inside the tree: the detailed and cheap versions of a species move their shared points identically.
+ */
+export function windBend(y: number, h: number): number {
+  const t = Math.min(1, Math.max(0, y / h));
+  return Math.min(1, t * t * (h / 60));
+}
+/** Wood: follows the bend, never flutters. */
+const woodWind = (h: number, base = 0): WindFn => (p) => ({ bend: windBend(p.y - base, h) });
+/** Leaf cards: bend plus full flutter (flutter > 0.5 also marks the vertex as LEAF for the chunk colour field). */
+const leafWind = (h: number, base = 0, flutter = 1): WindFn => (p) => ({ bend: windBend(p.y - base, h), flutter });
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+/**
+ * A hanging liana: bends with the limb it hangs from (bend of the attachment height) and swings as a pendulum, weight 0 at the attachment .. 1
+ * at the free end, scaled down for short ones so the swing angle stays similar. `leaf` = the trailing leaf card (flutters too).
+ */
+const lianaWind = (attachY: number, drop: number, h: number, base = 0, leaf = false): WindFn => {
+  const bend = windBend(attachY - base, h);
+  const fac = Math.min(1, Math.max(0.35, drop / 8));
+  return (p) => ({ bend, flutter: leaf ? 0.8 : 0, vine: clamp01((attachY - p.y) / drop) * fac });
+};
+
 const BARK = {
   dark: new Color(PAL.barkDark),
   mid: new Color(PAL.bark),
@@ -281,19 +309,21 @@ function crownColor(tone: number, seed: number): (p: Vector3, up: number) => Col
 }
 
 /** A limb as a tapering tube; returns its end/mid for sub-branches and crowns. */
-function limb(parts: Part[], start: Vector3, dir: Vector3, len: number, r0: number, rise: number, color: ColorFn, radial: number, segs: number): { end: Vector3; mid: Vector3; at: (t: number) => Vector3 } {
+function limb(parts: Part[], start: Vector3, dir: Vector3, len: number, r0: number, rise: number, color: ColorFn, radial: number, segs: number, wind?: WindFn): { end: Vector3; mid: Vector3; at: (t: number) => Vector3 } {
   const mid = start.clone().addScaledVector(dir, len * 0.5).add(new Vector3(0, len * rise * 0.7, 0));
   const end = start.clone().addScaledVector(dir, len).add(new Vector3(0, len * rise, 0));
   const q = start.clone().lerp(mid, 0.5).add(new Vector3(0, len * 0.04, 0));
   const pts = [start, q, mid, end];
-  parts.push({ geo: solidUV(tubeAlong(pts, (t) => r0 * (1 - 0.82 * t), radial, segs)), color });
+  parts.push({ geo: solidUV(tubeAlong(pts, (t) => r0 * (1 - 0.82 * t), radial, segs)), color, wind });
   return { end, mid, at: (t) => (t < 0.5 ? start.clone().lerp(mid, t * 2) : mid.clone().lerp(end, (t - 0.5) * 2)) };
 }
 
 export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi'): Mesh {
   const spec = TREE_SPECS[kind][variant % TREE_SPECS[kind].length];
   const rng = makeRandom(spec.seed + (lod === 'lo' ? 7 : 0));
-  const parts: Part[] = [{ geo: trunkGeometry(spec, lod), color: barkColor(spec) }];
+  const wood = woodWind(spec.height);
+  const leafy = leafWind(spec.height);
+  const parts: Part[] = [{ geo: trunkGeometry(spec, lod), color: barkColor(spec), wind: wood }];
   const bark = barkColor(spec);
 
   const c = new Vector3();
@@ -314,7 +344,7 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
       pts.push(surface(t * top, th0 + t * turns * Math.PI * 2, 1.04));
     }
     const rad = 0.045 + rng() * 0.035;
-    parts.push({ geo: solidUV(tubeAlong(pts, (t) => rad * (1.2 - 0.5 * t), 4, 10)), color: lerpColor('#2c4520', '#4a5a2a', rng()) });
+    parts.push({ geo: solidUV(tubeAlong(pts, (t) => rad * (1.2 - 0.5 * t), 4, 10)), color: lerpColor('#2c4520', '#4a5a2a', rng()), wind: wood });
   }
 
   // Limbs -> sub-limbs -> crown clusters.
@@ -327,7 +357,7 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
     const len = spec.crown * (0.7 + 0.55 * rng()) * (0.65 + 0.5 * (h / spec.height));
     const dir = new Vector3(Math.cos(th), 0, Math.sin(th));
     const r0 = Math.max(0.1, trunkRadiusAt(spec, h, th) * 0.32);
-    const L = limb(parts, start, dir, len, r0, 0.1 + 0.2 * rng(), bark, lod === 'hi' ? 4 : 4, lod === 'hi' ? 5 : 3);
+    const L = limb(parts, start, dir, len, r0, 0.1 + 0.2 * rng(), bark, lod === 'hi' ? 4 : 4, lod === 'hi' ? 5 : 3, wood);
     crowns.push({ p: L.end, r: spec.crown * 0.55 });
     if (lod === 'hi') {
       // Sub-limbs fork off the outer half.
@@ -336,7 +366,7 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
         const st = L.at(t);
         const ang = th + (k ? 0.75 : -0.75) * (0.7 + 0.5 * rng());
         const sd = new Vector3(Math.cos(ang), 0, Math.sin(ang));
-        const S = limb(parts, st, sd, len * (0.38 + 0.2 * rng()), r0 * 0.45, 0.12 + 0.2 * rng(), bark, 4, 4);
+        const S = limb(parts, st, sd, len * (0.38 + 0.2 * rng()), r0 * 0.45, 0.12 + 0.2 * rng(), bark, 4, 4, wood);
         crowns.push({ p: S.end, r: spec.crown * 0.4 });
       }
       // Hanging lianas from the limb underside.
@@ -346,11 +376,12 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
         const drop = 3 + rng() * (spec.height * 0.2);
         const sway = (rng() - 0.5) * 0.9;
         const pts = [at.clone(), at.clone().add(new Vector3(sway * 0.3, -drop * 0.35, sway * 0.2)), at.clone().add(new Vector3(sway, -drop * 0.7, -sway * 0.4)), at.clone().add(new Vector3(sway * 0.6, -drop, sway * 0.2))];
-        parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.035 * (1 - 0.5 * t), 3, 5)), color: lerpColor('#27401c', '#3e5524', rng()) });
+        const swing = lianaWind(at.y, drop, spec.height);
+        parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.035 * (1 - 0.5 * t), 3, 5)), color: lerpColor('#27401c', '#3e5524', rng()), wind: swing });
         // A trailing leaf card or two near the bottom.
         const lc = pts[3];
         const vc = cardGeometry('vine', 1.1 + rng() * 0.7, 0.55, 0.2, 2);
-        parts.push({ geo: vc, m: mat(lc.x, lc.y - 1.0, lc.z, 0, rng() * 6.28, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, rng()) });
+        parts.push({ geo: vc, m: mat(lc.x, lc.y - 1.0, lc.z, 0, rng() * 6.28, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, rng()), wind: lianaWind(at.y, drop, spec.height, 0, true) });
       }
     }
   }
@@ -359,11 +390,12 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
   const boughLeaf = crownColor(spec.tone, spec.seed + 5);
   for (const bh of PERCH_BOUGHS[kind]) {
     const pts = boughPoints(bh);
+    // rigid on purpose (no `wind`): animals sit on these
     parts.push({ geo: solidUV(tubeAlong(pts, boughRadius(bh), 4, lod === 'hi' ? 4 : 3)), color: bark });
     // Tufts never cover the perching spots (t 0.5-0.97 along the top of the bough): one starts just beyond the tip.
     const tuft = (at: Vector3, size: number, yaw: number, tilt: number) => {
       const m = mat(at.x, at.y, at.z, -Math.PI / 2 + tilt, yaw, 0).multiply(mat(0, -size / 2, 0));
-      parts.push({ geo: crownCard(size), m, normalFn: softNormals(new Vector3(0, bh.h - 2.5, 0), 0.5), color: (p) => boughLeaf(p, 0.55).multiplyScalar(0.92) });
+      parts.push({ geo: crownCard(size), m, normalFn: softNormals(new Vector3(0, bh.h - 2.5, 0), 0.5), color: (p) => boughLeaf(p, 0.55).multiplyScalar(0.92), wind: { flutter: 0.8 } });
     };
     const dirv = new Vector3(Math.cos(bh.ang), 0, Math.sin(bh.ang));
     const sz = 1.9 + bh.len * 0.08;
@@ -398,6 +430,7 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
         m,
         normalFn: softNormals(centre.clone().add(new Vector3(0, -spec.crown * 0.6, 0)), 0.5),
         color: (p) => color(p, up).multiplyScalar(jitter),
+        wind: leafy,
       });
     }
   }
@@ -420,8 +453,8 @@ export function entranceLimbCurve(): { pts: Vector3[]; radius: (t: number) => nu
   const [a, b] = ENTRANCE_TREES;
   const ya = terrainHeight(a[0], a[1]);
   const yb = terrainHeight(b[0], b[1]);
-  const pa = new Vector3(a[0] + 0.5, ya + 17.0, a[1]);
-  const pb = new Vector3(b[0] - 0.6, yb + 18.6, b[1]);
+  const pa = new Vector3(a[0] + 0.5, ya + ENTRANCE_LIMB.liftA, a[1]);
+  const pb = new Vector3(b[0] - 0.6, yb + ENTRANCE_LIMB.liftB, b[1]);
   const mid = pa.clone().lerp(pb, 0.5).add(new Vector3(0.3, 1.9, 0.9));
   const q1 = pa.clone().lerp(mid, 0.5).add(new Vector3(0, 0.5, -0.3));
   const q3 = mid.clone().lerp(pb, 0.5).add(new Vector3(0, 0.4, 0.4));
@@ -442,17 +475,25 @@ export function createEntranceCanopy(): Mesh {
   const { pts: limbPts, radius: limbRadius } = entranceLimbCurve();
   const [pa, q1, mid, q3, pb] = limbPts;
   const limbColor = barkColor({ ...TREE_SPECS.giant[0], seed: 31 });
-  parts.push({ geo: solidUV(tubeAlong(limbPts, limbRadius, 8, 22)), color: limbColor });
-  const l0 = new Vector3(a[0] + 1.3, ya + 13.2, a[1] + 0.9);
+  // Wind: the limb and its crowns follow the same bend as the two gate giants it springs from (weights relative to the ground between them,
+  // for a ~62 m tree), so the joins stay closed; the lianas swing from their attachment points.
+  const GATE_H = 62;
+  const baseY = (ya + yb) / 2;
+  const wood = woodWind(GATE_H, baseY);
+  const leafy = leafWind(GATE_H, baseY);
+  parts.push({ geo: solidUV(tubeAlong(limbPts, limbRadius, 8, 22)), color: limbColor, wind: wood });
+  const l0 = new Vector3(a[0] + 1.3, ya + 13.2 + ENTRANCE_LIMB.lowerLift, a[1] + 0.9);
   const l1 = pa.clone().lerp(pb, 0.45).add(new Vector3(0, 4.2, 1.6));
-  const l2 = new Vector3(b[0] - 1.4, yb + 13.8, b[1] + 0.9);
-  parts.push({ geo: solidUV(tubeAlong([l0, l1, l2], (t) => 0.1 + 0.05 * Math.sin(Math.PI * t), 5, 14)), color: lerpColor('#2f4a22', '#475a2d', 0.4) });
+  const l2 = new Vector3(b[0] - 1.4, yb + 13.8 + ENTRANCE_LIMB.lowerLift, b[1] + 0.9);
+  parts.push({ geo: solidUV(tubeAlong([l0, l1, l2], (t) => 0.1 + 0.05 * Math.sin(Math.PI * t), 5, 14)), color: lerpColor('#2f4a22', '#475a2d', 0.4), wind: wood });
 
   const color = crownColor(0.2, 900);
   const centre = pa.clone().lerp(pb, 0.5).add(new Vector3(0, 2, 0));
   for (let i = 0; i < 12; i++) {
     const t = 0.06 + 0.88 * (i / 11);
     const p = pa.clone().lerp(pb, t);
+    // the middle of the span is the window onto the waterfall from the knoll: leaf clusters only toward the two trunks (the portal's frame)
+    if (Math.abs(p.x - 0.4) < 6.5) continue;
     p.y = pa.y + (pb.y - pa.y) * t + 2.2 * Math.sin(Math.PI * t) + 0.7;
     p.z += (rng() - 0.5) * 1.6;
     const size = 3.0 + rng() * 2.0;
@@ -460,20 +501,23 @@ export function createEntranceCanopy(): Mesh {
     const m = mat(p.x, p.y, p.z, flat ? -Math.PI / 2 + (rng() - 0.5) * 0.4 : (rng() - 0.5) * 0.4, rng() * 6.28, 0).multiply(mat(0, -size / 2, 0));
     const up = flat ? 0.8 : 0.45;
     const jitter = 0.85 + 0.3 * rng();
-    parts.push({ geo: crownCard(size), m, normalFn: softNormals(centre, 0.5), color: (q) => color(q, up).multiplyScalar(jitter) });
+    parts.push({ geo: crownCard(size), m, normalFn: softNormals(centre, 0.5), color: (q) => color(q, up).multiplyScalar(jitter), wind: leafy });
   }
   for (let i = 0; i < 24; i++) {
     const t = 0.1 + 0.8 * rng();
     const at = pa.clone().lerp(pb, t);
     at.y = pa.y + (pb.y - pa.y) * t + 1.9 * Math.sin(Math.PI * t) - 0.1;
     at.z += (rng() - 0.5) * 0.7;
-    const drop = 4 + rng() * 9;
+    let drop = 4 + rng() * 9;
+    // the middle of the span is the window onto the waterfall from the knoll: short lianas there, full-length curtains at the portal's edges
+    if (Math.abs(at.x - 0.4) < 7) drop = Math.min(drop, 3);
     const sway = (rng() - 0.5) * 0.8;
     const pts = [at.clone(), at.clone().add(new Vector3(sway * 0.3, -drop * 0.3, 0)), at.clone().add(new Vector3(sway, -drop * 0.7, (rng() - 0.5) * 0.3)), at.clone().add(new Vector3(sway * 0.8, -drop, 0))];
     const rad = 0.025 + rng() * 0.03;
-    parts.push({ geo: solidUV(tubeAlong(pts, (u) => rad * (1 - 0.4 * u), 3, 8)), color: lerpColor('#243a19', '#46622a', rng()) });
+    const swing = lianaWind(at.y, drop, GATE_H, baseY);
+    parts.push({ geo: solidUV(tubeAlong(pts, (u) => rad * (1 - 0.4 * u), 3, 8)), color: lerpColor('#243a19', '#46622a', rng()), wind: swing });
     if (rng() > 0.35) {
-      parts.push({ geo: cardGeometry('vine', 1.4 + rng() * 1.2, 0.7, 0.15, 2), m: mat(pts[3].x, pts[3].y - 1.3, pts[3].z, 0, rng() * 6.28, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, rng()) });
+      parts.push({ geo: cardGeometry('vine', 1.4 + rng() * 1.2, 0.7, 0.15, 2), m: mat(pts[3].x, pts[3].y - 1.3, pts[3].z, 0, rng() * 6.28, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, rng()), wind: lianaWind(at.y, drop, GATE_H, baseY, true) });
     }
   }
   const mesh = new Mesh(mergeParts(parts), foliageCardMaterial);

@@ -12,11 +12,12 @@
  *   ground cover clover mat, grass tuft, mixed; flowers (the warm accent); moss; litter
  *   water plants reeds, floating pads
  */
-import { Color, Mesh, Vector3 } from '@iwsdk/core';
+import { BufferGeometry, Color, Float32BufferAttribute, Mesh, Uint8BufferAttribute, Vector3 } from '@iwsdk/core';
 import { makeRandom } from '../world/layout.js';
-import { PAL } from '../world/palette.js';
+import { MEADOW, PAL } from '../world/palette.js';
 import { cardGeometry, lerpColor, mat, mergeBaked, mergeParts, softNormals, solidUV, tubeAlong } from './lib/geo.js';
 import type { Part } from './lib/geo.js';
+import { tileUV } from './lib/leaf-atlas.js';
 import { foliageCardMaterial } from './lib/materials.js';
 
 const GOLDEN = 2.399963;
@@ -350,5 +351,184 @@ export function createPatch(variant: number): Mesh {
   }
   const m = new Mesh(mergeBaked(bits), foliageCardMaterial);
   m.name = `Patch_${variant}`;
+  return m;
+}
+
+
+// ---------------------------------------------------------------------------
+// Overlook Knoll meadow: wind-swept OPAQUE grass tufts and wildflowers
+// ---------------------------------------------------------------------------
+//
+// Hand-built triangles (no cards, no alpha shapes): every vertex maps to the atlas' solid bark tile, so the shared plant material never discards a fragment
+// here (zero alpha-test layers) and the draw call is the ground cells' one. Origins sit on the ground, +Y up, local +Z is the lean direction: the placement
+// code yaws a tuft so that +Z points down the wind (MEADOW_WIND) and a flower so that +Z points at the sun, which is where its head faces.
+// chunks.scene-asset merges these with `aSway` (weight 0 at the root .. 1 at the tip), so the stems bend in plantFoliageMaterial's wind and are pushed
+// aside by the player's feet and hands, exactly like the other plants.
+
+/** The bark tile is ~0.78 grey: colours are lifted by this much so the tuft reads as the colour written in the palette. */
+const SOLID_GAIN = 1.28;
+const [SU0, SV0, SU1, SV1] = tileUV('bark');
+const SOLID_U = (SU0 + SU1) / 2;
+const SOLID_V = (SV0 + SV1) / 2;
+
+class RawMesh {
+  pos: number[] = [];
+  nor: number[] = [];
+  col: number[] = [];
+  uv: number[] = [];
+  idx: number[] = [];
+  private c = new Color();
+  vert(x: number, y: number, z: number, n: readonly [number, number, number], c: Color, k = 1): number {
+    this.c.copy(c).multiplyScalar(SOLID_GAIN * k);
+    this.pos.push(x, y, z);
+    this.nor.push(n[0], n[1], n[2]);
+    this.col.push(this.c.r, this.c.g, this.c.b);
+    this.uv.push(SOLID_U, SOLID_V);
+    return this.pos.length / 3 - 1;
+  }
+  tri(a: number, b: number, c: number): void {
+    this.idx.push(a, b, c);
+  }
+  geometry(): BufferGeometry {
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('normal', new Float32BufferAttribute(this.nor, 3));
+    g.setAttribute('color', new Float32BufferAttribute(this.col, 3));
+    g.setAttribute('uv', new Float32BufferAttribute(this.uv, 2));
+    // rigid for foliageCardMaterial's tree wind (the prototype is never drawn itself; the ground chunks that merge it sway through aSway instead)
+    g.setAttribute('aWind', new Uint8BufferAttribute(new Uint8Array((this.pos.length / 3) * 4), 4, true));
+    g.setIndex(this.idx);
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  }
+}
+
+const unit = (x: number, y: number, z: number): [number, number, number] => {
+  const l = Math.hypot(x, y, z) || 1;
+  return [x / l, y / l, z / l];
+};
+
+/**
+ * One grass blade (or flower leaf): base `(bx, -0.03, bz)`, leaning outward by `tilt` radians along azimuth `az` and down-wind (+Z) by `lean * len`.
+ * `rich` = 3 triangles (base quad + tip), otherwise 1 triangle. Normals point mostly up (lit like the ground carpet), tinted from `lo` (root, shaded) to `hi` (sunlit tip).
+ */
+function addBlade(r: RawMesh, rng: () => number, bx: number, bz: number, az: number, len: number, w: number, tilt: number, lean: number, lo: Color, hi: Color, rich: boolean): void {
+  const ox = Math.cos(az);
+  const oz = Math.sin(az);
+  const tx = bx + ox * Math.sin(tilt) * len * 0.9;
+  const tz = bz + oz * Math.sin(tilt) * len * 0.9 + lean * len;
+  const ty = Math.cos(tilt) * len;
+  const phi = az + Math.PI / 2 + (rng() - 0.5) * 1.1;
+  const sx = Math.cos(phi) * 0.5;
+  const sz = Math.sin(phi) * 0.5;
+  const n = unit(ox * 0.3, 0.9, oz * 0.3);
+  const k = 0.92 + 0.16 * rng();
+  if (rich) {
+    const mx = bx + (tx - bx) * 0.42;
+    const mz = bz + (tz - bz) * 0.34;
+    const my = ty * 0.5;
+    const mid = new Color().copy(lo).lerp(hi, 0.5);
+    const a = r.vert(bx - sx * w, -0.03, bz - sz * w, n, lo, k);
+    const b = r.vert(bx + sx * w, -0.03, bz + sz * w, n, lo, k);
+    const c = r.vert(mx - sx * w * 0.72, my, mz - sz * w * 0.72, n, mid, k);
+    const d = r.vert(mx + sx * w * 0.72, my, mz + sz * w * 0.72, n, mid, k);
+    const t = r.vert(tx, ty, tz, n, hi, k);
+    r.tri(a, b, c);
+    r.tri(b, d, c);
+    r.tri(c, d, t);
+  } else {
+    const a = r.vert(bx - sx * w * 1.15, -0.03, bz - sz * w * 1.15, n, lo, k);
+    const b = r.vert(bx + sx * w * 1.15, -0.03, bz + sz * w * 1.15, n, lo, k);
+    const t = r.vert(tx, ty, tz, n, hi, k);
+    r.tri(a, b, t);
+  }
+}
+
+/**
+ * Wind-swept grass tuft, ~0.55-0.8 m tall at scale 1 (placed at 0.85-1.25). Variants: 0 fresh-green and 1 curing-gold NEAR tufts (5 blades x 3 triangles = 15),
+ * 2 fresh-green and 3 curing-gold FAR tufts (7 single-triangle blades = 7), used beyond ~12 m where the shape no longer shows. The blades splay outward and
+ * all lean down-wind (+Z), so a field of tufts all yawed to the wind flows in one direction.
+ */
+export function createMeadowTuft(variant: number): Mesh {
+  const v = ((variant % 4) + 4) % 4;
+  const gold = v % 2 === 1;
+  const far = v >= 2;
+  const rng = makeRandom(5200 + v * 13);
+  const r = new RawMesh();
+  const lo = new Color(MEADOW.base).lerp(new Color(gold ? MEADOW.gold : MEADOW.lush), gold ? 0.45 : 0.15);
+  const hi = new Color(gold ? MEADOW.goldTip : MEADOW.lushTip);
+  const n = far ? 7 : 5;
+  for (let i = 0; i < n; i++) {
+    const az = (i / n) * Math.PI * 2 + rng() * 0.9;
+    const rad = 0.03 + 0.07 * rng();
+    const len = (0.5 + 0.3 * rng()) * (i === 0 ? 1.15 : 1);
+    const w = far ? 0.034 : 0.026 + 0.012 * rng();
+    addBlade(r, rng, Math.cos(az) * rad, Math.sin(az) * rad, az, len, w, 0.1 + 0.36 * rng(), 0.14 + 0.2 * rng(), lo, gold ? hi.clone().lerp(new Color(MEADOW.straw), 0.3 * rng()) : hi, !far);
+  }
+  const m = new Mesh(r.geometry(), foliageCardMaterial);
+  m.name = `MeadowTuft_${v}`;
+  return m;
+}
+
+/** Flower colours per variant: [petal, eye]. The warm accent (PAL.accent) appears only in variant 3, as one flower of four. */
+const BLOOM: { petals: string[]; eye: string }[] = [
+  { petals: [MEADOW.bloomWhite, MEADOW.bloomWhite, MEADOW.bloomPink, MEADOW.bloomWhite], eye: MEADOW.bloomEye },
+  { petals: [MEADOW.bloomBlue, MEADOW.bloomViolet, MEADOW.bloomBlue, MEADOW.bloomViolet], eye: MEADOW.bloomWhite },
+  { petals: [MEADOW.bloomYellow, MEADOW.bloomYellow, MEADOW.bloomWhite, MEADOW.bloomYellow], eye: MEADOW.bloomEye },
+  { petals: [PAL.accent, MEADOW.bloomWhite, MEADOW.bloomViolet, MEADOW.bloomWhite], eye: MEADOW.bloomEye },
+];
+
+/**
+ * A clump of four wildflowers on 0.35-0.8 m stems (+ two leaves), opaque: a stem triangle and a six-triangle fan head each (7), 30 triangles in all.
+ * Heads tilt toward +Z; the placement code points +Z at the sun, so the blooms face the sun and the player behind it. Variants: 0 white daisies with a
+ * golden eye, 1 blue and violet, 2 pale yellow, 3 mixed with one amber flower (the warm accent, only here).
+ */
+export function createMeadowFlowers(variant: number): Mesh {
+  const v = ((variant % 4) + 4) % 4;
+  const rng = makeRandom(5300 + v * 17);
+  const r = new RawMesh();
+  const stemLo = new Color(MEADOW.base);
+  const stemHi = new Color(MEADOW.stem);
+  const eye = new Color(BLOOM[v].eye);
+  const hn = unit(0, 0.5, 0.87);
+  // head plane basis: u along X, w = hn x u
+  const ux = 1;
+  const wv = unit(0, hn[2], -hn[1]);
+  for (let i = 0; i < 4; i++) {
+    const a = i * 2.4 + rng() * 0.6;
+    const rad = 0.05 + 0.15 * rng();
+    const bx = Math.cos(a) * rad;
+    const bz = Math.sin(a) * rad;
+    const h = 0.35 + 0.45 * rng();
+    const lean = 0.05 + 0.12 * rng();
+    const hx = bx + (rng() - 0.5) * 0.1;
+    const hz = bz + lean * h;
+    const petal = new Color(BLOOM[v].petals[i]);
+    // stem: one tapered triangle from the root to the head
+    const sn = unit(0, 1, 0.3);
+    const s0 = r.vert(bx - 0.009, -0.03, bz, sn, stemLo);
+    const s1 = r.vert(bx + 0.009, -0.03, bz, sn, stemLo);
+    const s2 = r.vert(hx, h, hz, sn, stemHi);
+    r.tri(s0, s1, s2);
+    // head: hexagon fan around the eye, tilted toward +Z; the ring is slightly larger on the sunward side of a lifted rim
+    const R = 0.042 + 0.018 * rng();
+    const c0 = r.vert(hx, h + 0.004, hz, hn, eye, 1.0);
+    const ring: number[] = [];
+    for (let k = 0; k < 6; k++) {
+      const t = (k / 6) * Math.PI * 2 + 0.3 * i;
+      const px = Math.cos(t) * R;
+      const pw = Math.sin(t) * R;
+      ring.push(r.vert(hx + ux * px + wv[0] * pw, h + wv[1] * pw, hz + wv[2] * pw, hn, petal, 0.96 + 0.08 * (k % 2)));
+    }
+    for (let k = 0; k < 6; k++) r.tri(c0, ring[k], ring[(k + 1) % 6]);
+  }
+  // two leaves at the root
+  for (let i = 0; i < 2; i++) {
+    const az = i * 3.1 + rng();
+    addBlade(r, rng, Math.cos(az) * 0.05, Math.sin(az) * 0.05, az, 0.22 + 0.1 * rng(), 0.03, 0.5 + 0.3 * rng(), 0.1, stemLo, stemHi, false);
+  }
+  const m = new Mesh(r.geometry(), foliageCardMaterial);
+  m.name = `MeadowFlowers_${v}`;
   return m;
 }

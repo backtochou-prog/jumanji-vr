@@ -24,6 +24,24 @@ import {
 
 export type ColorFn = (p: Vector3, n: Vector3) => Color;
 
+/**
+ * Per-vertex wind weights, all 0..1, packed into the `aWind` attribute (Uint8, normalised) that `foliageCardMaterial` reads:
+ *   bend     whole-tree sway: grows with height along the trunk and is the SAME pure function of the vertex' tree-local position in the
+ *            detailed, cheap and far versions of a tree, so nothing pops at an LOD switch
+ *   flutter  leaf shiver (0 for wood, which therefore only follows the bend); > 0.5 also marks a vertex as LEAF for the colour field
+ *   phase    per-card phase (default: a hash of the part's first vertex)
+ *   vine     pendulum swing of a hanging liana: 0 at the attachment .. 1 at the free end
+ * Parts without `wind` are rigid (all zero).
+ */
+export interface WindWeights {
+  bend?: number;
+  flutter?: number;
+  phase?: number;
+  vine?: number;
+}
+/** Wind weights as a function of the vertex position after the part's transform (tree-local metres). */
+export type WindFn = (p: Vector3) => WindWeights;
+
 export interface Part {
   geo: BufferGeometry;
   /** Optional per-vertex normal override (after the transform): used for soft foliage lighting. */
@@ -32,7 +50,15 @@ export interface Part {
   m?: Matrix4;
   /** Constant colour or a per-vertex function (local position, world-ish normal). */
   color: string | number | Color | ColorFn;
+  /** Optional wind weights (constant or per-vertex). Omitted = rigid. */
+  wind?: WindWeights | WindFn;
 }
+
+const hash01 = (x: number, y: number, z: number): number => {
+  const h = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453;
+  return h - Math.floor(h);
+};
+const byte = (v: number | undefined): number => (v === undefined ? 0 : Math.round(Math.min(1, Math.max(0, v)) * 255));
 
 const _p = new Vector3();
 const _n = new Vector3();
@@ -52,10 +78,13 @@ export function mergeParts(parts: Part[]): BufferGeometry {
   const col = new Float32Array(vCount * 3);
   const uv = new Float32Array(vCount * 2);
   const idx = new Uint32Array(iCount);
+  /** bend, flutter, phase, vine (see WindWeights). Always emitted: every geometry drawn with foliageCardMaterial must carry the attribute. */
+  const wnd = new Uint8Array(vCount * 4);
   let vo = 0;
   let io = 0;
   for (const part of parts) {
     const g = part.geo;
+    let partPhase = 0;
     if (!g.getAttribute('normal')) g.computeVertexNormals();
     const gp = g.getAttribute('position');
     const gn = g.getAttribute('normal');
@@ -89,6 +118,15 @@ export function mergeParts(parts: Part[]): BufferGeometry {
         uv[(vo + i) * 2] = gu.getX(i);
         uv[(vo + i) * 2 + 1] = gu.getY(i);
       }
+      if (part.wind) {
+        if (i === 0) partPhase = hash01(_p.x, _p.y, _p.z);
+        const w = typeof part.wind === 'function' ? part.wind(_p) : part.wind;
+        const wo = (vo + i) * 4;
+        wnd[wo] = byte(w.bend);
+        wnd[wo + 1] = byte(w.flutter);
+        wnd[wo + 2] = byte(w.phase ?? partPhase);
+        wnd[wo + 3] = byte(w.vine);
+      }
     }
     if (g.index) {
       for (let i = 0; i < g.index.count; i++) idx[io + i] = g.index.getX(i) + vo;
@@ -104,6 +142,7 @@ export function mergeParts(parts: Part[]): BufferGeometry {
   out.setAttribute('normal', new BufferAttribute(nor, 3));
   out.setAttribute('color', new BufferAttribute(col, 3));
   out.setAttribute('uv', new BufferAttribute(uv, 2));
+  out.setAttribute('aWind', new BufferAttribute(wnd, 4, true));
   out.setIndex(new BufferAttribute(idx, 1));
   out.computeBoundingBox();
   out.computeBoundingSphere();
@@ -293,7 +332,19 @@ export function softNormals(center: Vector3, upBias = 0.55): (p: Vector3, n: Vec
  * Merge already-baked geometries (position/normal/uv/colour, any colour item size) with a transform each.
  * Used to compose clusters/patches out of small assets and to fuse many world-space pieces into one draw call.
  */
-export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-instance colour multiplier [r,g,b] */ tint?: [number, number, number] }[], sway = false): BufferGeometry {
+export function mergeBaked(
+  items: {
+    geo: BufferGeometry;
+    m?: Matrix4;
+    /** per-instance colour multiplier [r,g,b] */
+    tint?: [number, number, number];
+    /** multiplier for WOOD vertices only (aWind flutter <= 0.5); `tint` then applies to leaf vertices. Default: `tint` everywhere. */
+    woodTint?: [number, number, number];
+  }[],
+  sway = false,
+  /** copy the source geometries' `aWind` attribute (needed by foliageCardMaterial; skipped for sway chunks, rocks, ...) */
+  keepWind = true,
+): BufferGeometry {
   let vCount = 0;
   let iCount = 0;
   let colorSize = 3;
@@ -310,6 +361,8 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
   const idx = new Uint32Array(iCount);
   /** Per-vertex wind/proximity weight (x) and the plant's height (y): 0 at the root, 1 at the tip of the prototype (only when `sway`). */
   const sw = sway ? new Float32Array(vCount * 2) : null;
+  /** bend, flutter, phase, vine of the sources (see WindWeights): only when some source carries it and this is not a sway chunk. */
+  const wd = !sway && keepWind && items.some((it) => it.geo.getAttribute('aWind')) ? new Uint8Array(vCount * 4) : null;
   let vo = 0;
   let io = 0;
   const p = new Vector3();
@@ -323,6 +376,7 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
     const gn = g.getAttribute('normal');
     const gc = g.getAttribute('color');
     const gu = g.getAttribute('uv');
+    const gw = g.getAttribute('aWind');
     if (it.m) nm.getNormalMatrix(it.m);
     for (let i = 0; i < gp.count; i++) {
       p.fromBufferAttribute(gp, i);
@@ -330,6 +384,21 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
         const wgt = Math.min(1, Math.max(0, p.y / Math.max(hgt, 0.5)));
         sw[(vo + i) * 2] = Math.pow(wgt, 1.3);
         sw[(vo + i) * 2 + 1] = hgt;
+        // hanging lianas (vine curtains) have no height-above-the-root weight: swing them with the plant shader by their pendulum weight
+        if (gw) {
+          const vine = gw.getW(i);
+          if (vine > 0) {
+            sw[(vo + i) * 2] = Math.max(sw[(vo + i) * 2], vine);
+            sw[(vo + i) * 2 + 1] = Math.max(hgt, 3);
+          }
+        }
+      }
+      if (wd && gw) {
+        const wo = (vo + i) * 4;
+        wd[wo] = Math.round(gw.getX(i) * 255);
+        wd[wo + 1] = Math.round(gw.getY(i) * 255);
+        wd[wo + 2] = Math.round(gw.getZ(i) * 255);
+        wd[wo + 3] = Math.round(gw.getW(i) * 255);
       }
       if (it.m) p.applyMatrix4(it.m);
       pos.set([p.x, p.y, p.z], (vo + i) * 3);
@@ -340,7 +409,7 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
       }
       if (gc) {
         const o = (vo + i) * colorSize;
-        const t = it.tint;
+        const t = it.woodTint && !(gw && gw.getY(i) > 0.5) ? it.woodTint : it.tint;
         col[o] = gc.getX(i) * (t ? t[0] : 1);
         col[o + 1] = gc.getY(i) * (t ? t[1] : 1);
         col[o + 2] = gc.getZ(i) * (t ? t[2] : 1);
@@ -358,6 +427,7 @@ export function mergeBaked(items: { geo: BufferGeometry; m?: Matrix4; /** per-in
   out.setAttribute('color', new BufferAttribute(col, colorSize));
   out.setAttribute('uv', new BufferAttribute(uv, 2));
   if (sw) out.setAttribute('aSway', new BufferAttribute(sw, 2));
+  if (wd) out.setAttribute('aWind', new BufferAttribute(wd, 4, true));
   out.setIndex(new BufferAttribute(idx, 1));
   out.computeBoundingBox();
   out.computeBoundingSphere();

@@ -22,7 +22,8 @@
     "audit": "node tools/audit.mjs",
     "wildlife": "node tools/wildlife-test.mjs",
     "wildlife:browser": "node tools/wildlife-test.mjs --only none --browser",
-    "lod": "node tools/lod-gaps.mjs && node tools/lod-gaps.mjs --low"
+    "lod": "node tools/lod-gaps.mjs && node tools/lod-gaps.mjs --low",
+    "lod:live": "node tools/lod-live.mjs && node tools/warmup-flash.mjs"
   },
   "dependencies": {
     "@iwsdk/core": "1.1.0-rc.2",

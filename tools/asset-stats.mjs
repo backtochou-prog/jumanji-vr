@@ -180,6 +180,8 @@ try {
     return { p: [px, py, pz], fwd, ps: [L_, R_, T_, B_] };
   };
   let LOW = false; // evaluate the 'low' tier rules
+  /** asset id -> scene node name, for the per-name landmark caps of the knoll vista (JUNGLE_LANDMARK_CAP_NAMED) */
+  const LANDMARK_NODE = { cliff: 'Distant cliff', waterfall: 'Distant waterfall', water: 'Pool, stream and puddles', temple: 'Overgrown temple', 'temple-growth': 'Temple overgrowth' };
   const visible = (cam, d) => {
     // Distance LOD rules (shared with the runtime ChunkLodSystem).
     const open = cam.open ?? 0;
@@ -187,7 +189,8 @@ try {
     if (d.chunk) {
       const size = L.CELL_SIZE[d.chunk.cls];
       const mountainCell = L.CHUNK_ORIGIN.x + d.chunk.ix * size >= 30;
-      if (!L.chunkVisible(d.chunk.cls, L.cellDistance(cam.p[0], cam.p[2], d.chunk.ix, d.chunk.iz, size), LOW, mountainCell ? Math.min(L.viewCap(open), mtnCap) : Math.min(L.viewCap(open), L.JUNGLE_CELL_CAP))) return false;
+      // (the knoll's vista raises the jungle cell cap 100 -> 130 m in the high tier: same functions as ChunkLodSystem)
+      if (!L.chunkVisible(d.chunk.cls, L.cellDistance(cam.p[0], cam.p[2], d.chunk.ix, d.chunk.iz, size), LOW, mountainCell ? Math.min(L.viewCap(open), mtnCap) : Math.min(L.viewCap(open), L.jungleCellCap(LOW ? 0 : (cam.vista ?? 0) * (1 - open))))) return false;
     }
     if (/^far-range/.test(d.name) && open <= 0.25) return false;
     if (d.name === 'giant-fall' || d.name === 'fall-mist') {
@@ -196,9 +199,9 @@ try {
       if (d.mesh === 'FallNear' && fd >= 240) return false;
       if (d.mesh === 'FallFar' && fd < 240) return false;
     }
-    if (/^ridge-\d$/.test(d.name) && open >= 0.5) return false;
+    if (/^ridge-\d$/.test(d.name) && open >= 0.5 && !((cam.vista ?? 0) > L.VISTA_LANDMARK_ON)) return false;
     // jungle landmarks and tiles are only drawn within 150 m of the player (ChunkLodSystem)
-    if ((d.mesh && /^Terrain_\d+_\d+$/.test(d.mesh)) || /^(temple|temple-growth|spire|spire-growth|altar|ruin-pillars|entrance-canopy|water|cliff|waterfall|root-arch|log-giant)$/.test(d.name)) { if (Math.hypot(d.x - cam.p[0], d.z - cam.p[2]) - d.r > L.JUNGLE_LANDMARK_CAP) return false; }
+    if ((d.mesh && /^Terrain_\d+_\d+$/.test(d.mesh)) || /^(temple|temple-growth|spire|spire-growth|altar|ruin-pillars|entrance-canopy|water|cliff|waterfall|root-arch|log-giant)$/.test(d.name)) { const named = L.JUNGLE_LANDMARK_CAP_NAMED[LANDMARK_NODE[d.name]]; const lmCap = (cam.vista ?? 0) > L.VISTA_LANDMARK_ON && named !== undefined ? Math.max(named, L.JUNGLE_LANDMARK_CAP) : L.JUNGLE_LANDMARK_CAP; if (Math.hypot(d.x - cam.p[0], d.z - cam.p[2]) - d.r > lmCap) return false; }
     if (d.mesh === 'Mountain_far' && cam.p[0] < 35 - mtnCap) return false; // its box starts at x = 35 (the runtime tests the box, the estimate has only a sphere)
     {
       // terrain LOD: a detailed 96 m root shows fine tiles within 150 m (100 m low) and one coarse mesh beyond
@@ -220,12 +223,22 @@ try {
     if (Math.hypot(dx, dy, dz) - d.r > (cam.far ?? FAR)) return false;
     return cam.ps.every((n) => dx * n[0] + dy * n[1] + dz * n[2] >= -d.r);
   };
+  // The sky pack (SkySystem) is built at run time, outside the manifest: counted here as a reserve wherever it is shown (vista > ~0.09), 2 draws (1 in the low tier: no clouds).
+  const SKYM = await server.ssrLoadModule('/src/scene-assets/sky.scene-asset.ts');
+  const triCount = (g) => g.index.count / 3;
+  const SKY = { clouds: triCount(SKYM.createSkyClouds()), glow: triCount(SKYM.createSkyGlow()) };
+  const skyReserve = (cam) => ((cam.vista ?? 0) > 0.09 ? { tris: LOW ? SKY.glow : SKY.clouds + SKY.glow, draws: LOW ? 1 : 2 } : { tris: 0, draws: 0 });
+  console.log(`   sky pack (runtime, 1 material outside the manifest): clouds ${SKY.clouds} + haze/sun ${SKY.glow} triangles, 2 draws`);
   const views = [];
   const N = L.PATH_SAMPLES.length;
-  const addView = (name, x, z, yaw, pitch = 0) => views.push({ name, cam: planes(x, L.terrainHeight(x, z) + 1.65, z, yaw, pitch) });
-  addView('spawn (north)', L.SPAWN[0], L.SPAWN[1], 0);
+  const addView = (name, x, z, yaw, pitch = 0) => { const cam = planes(x, L.terrainHeight(x, z) + 1.65, z, yaw, pitch); cam.vista = L.vistaAt(x, z); views.push({ name, cam }); };
+  // the start: the knoll, looking at the waterfall (the tool's yaw is clockwise-positive radians, the game's SPAWN_YAW_DEG counter-clockwise degrees)
+  addView('spawn (knoll vista)', L.SPAWN[0], L.SPAWN[1], (-L.SPAWN_YAW_DEG * Math.PI) / 180);
+  // the old dense worst case, kept: down the ramp with the gate ahead
+  addView('hill ramp (gate ahead)', L.GATE_POSE.x, L.GATE_POSE.z, 0);
+  const OLD_START = 5 * 12; // the knoll prefix of the trail (5 spline segments of 12 samples); the fractions below refer to the trail beyond it
   for (const [label, t] of [['gate', 0.2], ['trail 35%', 0.35], ['pool/ford', 0.46], ['root arch', 0.62], ['trail 80%', 0.8], ['clearing', 0.95]]) {
-    const i = Math.round(t * (N - 1));
+    const i = Math.round(OLD_START + t * (N - 1 - OLD_START));
     const a = L.PATH_SAMPLES[i];
     const b = L.PATH_SAMPLES[Math.min(N - 1, i + 6)];
     addView(label, a[0], a[1], Math.atan2(b[0] - a[0], -(b[1] - a[1])));
@@ -246,6 +259,7 @@ try {
   for (const v of views) {
     const mtnView = v.name.startsWith('MTN ');
     let tris = mtnView ? WILDLIFE.mountain.tris : WILDLIFE.jungle.tris, n = mtnView ? WILDLIFE.mountain.draws : WILDLIFE.jungle.draws;
+    { const sk = skyReserve(v.cam); tris += sk.tris; n += sk.draws; }
     for (const d of draws) {
       if (visible(v.cam, d)) {
         // A cell is one mesh: the GPU draws the whole cell when any part is inside the frustum (matches three.js culling).
@@ -273,7 +287,8 @@ try {
   let lowT = 0, lowD = 0;
   const lowRows = [];
   for (const v of views) {
-    let tris = 0, n = 0;
+    const sk = skyReserve(v.cam);
+    let tris = sk.tris, n = sk.draws;
     for (const d of draws) if (visible(v.cam, d)) { tris += d.tris; n++; }
     lowT = Math.max(lowT, tris); lowD = Math.max(lowD, n);
     if (v.name.startsWith('TEST') || ['MTN summit-down', 'MTN summit-fall', 'MTN descent', 'MTN bridge-mid', 'MTN brink'].includes(v.name)) lowRows.push(`${v.name.padEnd(36)} ${String(n).padStart(4)} draws ${Math.round(tris).toLocaleString().padStart(9)} tris`);

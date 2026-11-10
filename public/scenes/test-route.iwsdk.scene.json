@@ -4,38 +4,38 @@
  "components": {
   "com.iwsdk.components.DomeGradient": {
    "sky": [
-    0.3,
-    0.55,
-    0.58,
+    0.22,
+    0.46,
+    0.84,
     1
    ],
    "equator": [
-    0.66,
-    0.77,
-    0.7,
+    0.74,
+    0.79,
+    0.72,
     1
    ],
    "ground": [
-    0.12,
     0.17,
-    0.1,
+    0.23,
+    0.15,
     1
    ],
    "elevationDeg": 32,
-   "azimuthDeg": 110,
+   "azimuthDeg": -100,
    "dither": true
   },
   "com.iwsdk.components.IBLGradient": {
    "sky": [
-    0.36,
-    0.52,
+    0.34,
     0.5,
+    0.66,
     1
    ],
    "equator": [
-    0.36,
     0.46,
-    0.36,
+    0.42,
+    0.32,
     1
    ],
    "ground": [
@@ -44,7 +44,7 @@
     0.07,
     1
    ],
-   "intensity": 0.72
+   "intensity": 0.76
   }
  },
  "environment": {
@@ -61,13 +61,13 @@
  "player": {
   "transform": {
    "position": [
-    0.6,
-    -0.013,
-    11.5
+    -1.2,
+    7.037,
+    31
    ],
    "rotationDeg": [
     0,
-    0,
+    -2.6,
     0
    ]
   }
@@ -82,16 +82,32 @@
     "role": "hero",
     "projection": "perspective",
     "position": [
-     0.6,
-     1.637,
-     11.5
+     -1.2,
+     8.687,
+     31
     ],
     "target": [
-     -2.2,
-     3,
-     -8
+     4.3,
+     30,
+     -91
     ],
     "fov": 78
+   },
+   {
+    "id": "v-vista",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -1.2,
+     8.687,
+     31
+    ],
+    "target": [
+     2,
+     22,
+     -91
+    ],
+    "fov": 70
    },
    {
     "id": "v-entrance",
@@ -99,7 +115,7 @@
     "projection": "perspective",
     "position": [
      0.2,
-     1.752,
+     5.388,
      5.5
     ],
     "target": [
@@ -115,7 +131,7 @@
     "projection": "perspective",
     "position": [
      0,
-     1.891,
+     3.23,
      -6
     ],
     "target": [
@@ -131,7 +147,7 @@
     "projection": "perspective",
     "position": [
      -3,
-     1.772,
+     1.822,
      -16.5
     ],
     "target": [
@@ -147,7 +163,7 @@
     "projection": "perspective",
     "position": [
      -3.8,
-     1.804,
+     1.722,
      -21
     ],
     "target": [
@@ -163,7 +179,7 @@
     "projection": "perspective",
     "position": [
      -1,
-     1.832,
+     1.75,
      -21
     ],
     "target": [
@@ -179,7 +195,7 @@
     "projection": "perspective",
     "position": [
      4.6,
-     1.521,
+     1.601,
      -31.2
     ],
     "target": [
@@ -195,7 +211,7 @@
     "projection": "perspective",
     "position": [
      -1.2,
-     1.799,
+     1.716,
      -44
     ],
     "target": [
@@ -211,7 +227,7 @@
     "projection": "perspective",
     "position": [
      0,
-     1.641,
+     1.637,
      -55
     ],
     "target": [
@@ -529,25 +545,25 @@
    "name": "Sun",
    "transform": {
     "position": [
-     20,
-     30,
-     -51.5
+     11.848,
+     19.977,
+     -28.948
     ],
     "rotationDeg": [
-     -67.62,
-     36.79,
-     25.11
+     -31.57,
+     17.23,
+     4.9
     ]
    },
    "components": {
     "DirectionalLight": {
      "color": [
       1,
-      0.9,
-      0.72,
+      0.8,
+      0.55,
       1
      ],
-     "intensity": 3.1,
+     "intensity": 3.5,
      "castShadow": true,
      "shadowMapSize": "1024",
      "shadowCameraSize": 8,
@@ -565,18 +581,18 @@
    "components": {
     "HemisphereLight": {
      "skyColor": [
-      0.5,
-      0.72,
+      0.4,
       0.62,
+      0.76,
       1
      ],
      "groundColor": [
-      0.17,
-      0.2,
-      0.1,
+      0.3,
+      0.24,
+      0.12,
       1
      ],
-     "intensity": 1.25
+     "intensity": 1.2
     }
    }
   }

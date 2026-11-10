@@ -1,5 +1,5 @@
 <!--
-  Expedition board: title, controls, live XR status, comfort toggles.
+  Expedition board (stands on the lectern stone at the start): a calm welcome, Enter VR, and a More toggle that opens the comfort / sound / developer rows.
   Panel, Button, ButtonIcon, ButtonLabel come from the bundled Horizon kit.
   Sizes are plain px; the scene node scales the whole panel into metres.
 -->
@@ -24,14 +24,17 @@
   }
   .heading {
     color: #f6f3e8;
-    font-size: 32px;
+    font-size: 34px;
     font-weight: 700;
-    line-height: 38px;
+    line-height: 40px;
   }
   .body {
     color: #d9dccf;
-    font-size: 18px;
-    line-height: 25px;
+    font-size: 20px;
+    line-height: 27px;
+  }
+  .more {
+    flex-direction: column;
   }
   .status {
     color: #8fd9b5;
@@ -61,11 +64,11 @@
 </style>
 <Panel class="panel-root">
   <div class="panel-content">
-    <div class="eyebrow">JUMANJI VR - PROTOTYPE 01</div>
-    <div class="heading">Into the jungle</div>
-    <div class="body">Left stick: walk - Right stick: turn</div>
-    <div class="body">Hold the grip button near an object to grab it</div>
-    <div class="body">Follow the trail to the ancient clearing.</div>
+    <div class="eyebrow">JUMANJI VR</div>
+    <div class="heading">The overlook</div>
+    <div class="body">Left stick walks. Right stick turns.</div>
+    <div class="body">Hold grip near an object to pick it up.</div>
+    <div class="body">A trail leads down to the ancient clearing.</div>
     <div id="status" class="status">Checking for VR...</div>
   </div>
   <Button id="xr-button" class="button">
@@ -81,11 +84,15 @@
     <ButtonLabel class="button-label">Exit to browser</ButtonLabel>
   </Button>
   <div class="row">
+    <Button id="more-button" class="chip">
+      <ButtonLabel id="more-label">More options</ButtonLabel>
+    </Button>
+  </div>
+  <div id="more-section" class="more" style="display: none">
+  <div class="row">
     <Button id="turn-button" class="chip">
       <ButtonLabel id="turn-label">Snap turn 30 deg</ButtonLabel>
     </Button>
-  </div>
-  <div class="row">
     <Button id="quality-button" class="chip">
       <ButtonLabel id="quality-label">Quality high</ButtonLabel>
     </Button>
@@ -138,5 +145,6 @@
     <Button id="wildlife-button" class="chip">
       <ButtonLabel id="wildlife-label">Wildlife on</ButtonLabel>
     </Button>
+  </div>
   </div>
 </Panel>

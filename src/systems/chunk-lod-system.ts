@@ -1,6 +1,6 @@
 import { Box3, createSystem, Mesh, Vector3 } from '@iwsdk/core';
 import type { Object3D } from '@iwsdk/core';
-import { CELL_SIZE, CHUNK_ORIGIN, JUNGLE_CELL_CAP, JUNGLE_LANDMARK_CAP, TERRAIN_LOD, cellDistance, chunkVisible, viewCap } from '../world/layout.js';
+import { CELL_SIZE, CHUNK_ORIGIN, JUNGLE_LANDMARK_CAP, JUNGLE_LANDMARK_CAP_NAMED, TERRAIN_LOD, VISTA_LANDMARK_OFF, VISTA_LANDMARK_ON, cellDistance, chunkVisible, jungleCellCap, viewCap } from '../world/layout.js';
 import { riverPoint } from '../world/mountain.js';
 import { atmosphere } from './atmosphere-system.js';
 import type { ChunkClass } from '../world/layout.js';
@@ -10,6 +10,8 @@ import { metrics } from '../diagnostics/frame-metrics.js';
 interface Tile {
   obj: Object3D;
   box: Box3;
+  /** Landmark cap (m) while the vista is on (JUNGLE_LANDMARK_CAP_NAMED); undefined = the plain JUNGLE_LANDMARK_CAP. */
+  named?: number;
 }
 interface Root {
   fine: Object3D[];
@@ -60,6 +62,8 @@ export class ChunkLodSystem extends createSystem({}) {
   private fallFar: Object3D | null = null;
   private mist: Object3D | null = null;
   private acc = 1;
+  /** The vista (Overlook Knoll) is on: named landmarks keep their longer cap. Hysteresis on `atmosphere.vista` (VISTA_LANDMARK_ON/OFF). */
+  private vistaOn = false;
   private collected = false;
   private px = 0;
   private pz = 0;
@@ -96,7 +100,7 @@ export class ChunkLodSystem extends createSystem({}) {
       // Jungle landmarks and tiles (not cell-batched): only drawn within JUNGLE_LANDMARK_CAP so the mountain views do not pay for them.
       if (JUNGLE_LANDMARKS.test(o.name)) {
         const box = new Box3().setFromObject(o);
-        if (!box.isEmpty()) this.landmarks.push({ obj: o, box });
+        if (!box.isEmpty()) this.landmarks.push({ obj: o, box, named: JUNGLE_LANDMARK_CAP_NAMED[o.name] });
         return;
       }
       const m = /^veg (\S+) (\d+) (\d+)$/.exec(o.name);
@@ -116,18 +120,26 @@ export class ChunkLodSystem extends createSystem({}) {
 
   update(delta: number): void {
     this.acc += delta;
-    if (this.acc < 0.25) return;
-    this.acc = 0;
     if (!this.collected) {
+      // Until the level's cells exist, look every frame (not every 0.25 s) and apply the distance rules in the SAME frame they appear: cells are
+      // visible by default, so a 0.25 s wait showed the whole world (every LOD version, the mountain) for a few frames when the scene finished loading.
       this.collect();
       if (!this.collected) return;
+      this.acc = 0.25;
     }
+    if (this.acc < 0.25) return;
+    this.acc = 0;
     this.player.getWorldPosition(this.tmp);
     this.px = this.tmp.x;
     this.pz = this.tmp.z;
     const low = lodState.scale < 1;
     const open = atmosphere.open;
+    const vista = atmosphere.vista;
+    this.vistaOn = vista > (this.vistaOn ? VISTA_LANDMARK_OFF : VISTA_LANDMARK_ON);
     const cap = viewCap(open);
+    // Jungle vegetation cells: 100 m, growing to 130 m on the knoll (high tier) where the thinner fog would show the cut sideways (position-based `vista`, so it cannot pump).
+    // Only trees-lo / trees-far reach that far; every other class stops earlier by itself.
+    const jungleCap = jungleCellCap(low ? 0 : vista * (1 - open)); // the low tier keeps 100 m
     // Mountain-side content is only drawn near the player while the view is still the jungle's (dense, short): it is hidden behind the trees anyway.
     const mtnCap = 26 + 974 * open;
     // The giant fall: full detail within FALL_NEAR m, the two main sheets beyond; its mist only within MIST_RANGE m (and never in the low tier).
@@ -144,14 +156,16 @@ export class ChunkLodSystem extends createSystem({}) {
       if (this.mist.visible !== show) this.mist.visible = show;
     }
     // (landmarks, ridges and far ranges switch with hysteresis too: a bare threshold flashes them while the head sways or the player stands on it)
+    // (the ridge rings are also kept on while the vista is on: they carry the horizon of the knoll, whatever `open` says)
     for (const r of this.ridges) {
-      const v = r.visible ? open < 0.55 : open < 0.45;
+      const v = r.visible ? open < 0.55 || vista > VISTA_LANDMARK_OFF : open < 0.45 || vista > VISTA_LANDMARK_ON;
       if (r.visible !== v) r.visible = v;
     }
     for (const t of this.landmarks) {
       const dx = Math.max(t.box.min.x - this.px, 0, this.px - t.box.max.x);
       const dz = Math.max(t.box.min.z - this.pz, 0, this.pz - t.box.max.z);
-      const show = Math.hypot(dx, dz) <= JUNGLE_LANDMARK_CAP + (t.obj.visible ? 6 : -6);
+      const lmCap = this.vistaOn && t.named !== undefined ? Math.max(t.named, JUNGLE_LANDMARK_CAP) : JUNGLE_LANDMARK_CAP;
+      const show = Math.hypot(dx, dz) <= lmCap + (t.obj.visible ? 6 : -6);
       if (t.obj.visible !== show) t.obj.visible = show;
     }
     for (const t of this.mtnLandmarks) {
@@ -194,7 +208,7 @@ export class ChunkLodSystem extends createSystem({}) {
         if ((c.cls === 'trees-lo') !== (pass === 1)) continue;
         const d = cellDistance(this.px, this.pz, c.ix, c.iz, CELL_SIZE[c.cls]);
         const mountainCell = CHUNK_ORIGIN.x + c.ix * CELL_SIZE[c.cls] >= 30;
-        const limit = mountainCell ? Math.min(cap, mtnCap) : Math.min(cap, JUNGLE_CELL_CAP);
+        const limit = mountainCell ? Math.min(cap, mtnCap) : Math.min(cap, jungleCap);
         let show: boolean;
         if (c.twin) {
           // complementary hand-off: no gap, no double. (With independent hysteresis a cell that starts inside the +-1.5 m band is hidden in BOTH

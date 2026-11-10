@@ -23,7 +23,7 @@ await page.waitForTimeout(6000);
 const L = await page.evaluate(async () => { const l = await import('/src/world/layout.ts'); return { TEMPLE: l.TEMPLE, SPIRE: l.SPIRE, PILLARS: l.PILLARS, ALTAR: l.ALTAR, CLIFF: l.CLIFF, ROOT_ARCH: l.ROOT_ARCH, views: l.MTN_VIEWS, SPAWN: l.SPAWN, ENTRANCE_TREES: l.ENTRANCE_TREES }; });
 const T = L.TEMPLE;
 const stations = [
-  ['entrance', [L.SPAWN[0], L.SPAWN[1]], [L.SPAWN[0], 6, L.SPAWN[1] - 30]],
+  ['entrance', [L.SPAWN[0], L.SPAWN[1]], [4.3, 24, -91]],
   ['gate-tree', [L.ENTRANCE_TREES[0][0] + 5, L.ENTRANCE_TREES[0][1] + 11], [L.ENTRANCE_TREES[0][0], 12, L.ENTRANCE_TREES[0][1]]],
   ['trail-mid', [-2, -30], [-1, 5, -45]],
   ['temple-approach', [0, T.z + T.depth / 2 + 22], [0, 4, T.z]],

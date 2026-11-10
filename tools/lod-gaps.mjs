@@ -26,8 +26,12 @@ for (const t of trees) {
 }
 for (const kind of ['plants', 'ground']) for (const k of ['fern', 'broadleaf', 'shrub', 'palm', 'cover', 'flowers', 'moss', 'litter']) for (const p of P.plantPlacements(k)) addCell(kind === 'plants' && ['moss', 'litter', 'cover', 'flowers'].includes(k) ? 'ground' : 'plants', p.x, p.z);
 const open = 0;
-const cap = Math.min(L.viewCap(open), L.JUNGLE_CELL_CAP);
+// the jungle cell cap grows with the knoll's position-based vista (100 -> 130 m in the high tier), exactly as in ChunkLodSystem
+const capAt = (px, pz) => Math.min(L.viewCap(open), L.jungleCellCap(low ? 0 : L.vistaAt(px, pz) * (1 - open)));
+const cap0 = capAt(1e6, 1e6);
+let cap = capAt(L.SPAWN[0], L.SPAWN[1]);
 const step = (px, pz, t) => {
+  cap = capAt(px, pz);
   // same two passes as ChunkLodSystem: the cheap tree cell is drawn exactly when its detailed twin is not (and within the cap)
   for (let pass = 0; pass < 2; pass++) for (const c of cells.values()) {
     if ((c.cls === 'trees-lo') !== (pass === 1)) continue;
@@ -71,7 +75,7 @@ for (const c of cells.values()) {
   pops[c.cls] = (pops[c.cls] ?? 0) + c.toggles.length;
   for (let i = 2; i < c.toggles.length; i++) if (c.toggles[i] - c.toggles[i - 2] < 3) flashes++;
 }
-console.log(`walked ${walked.toFixed(0)} m (${t.toFixed(0)} s at 1.8 m/s), ${trees.length} trees, tier ${low ? 'low' : 'high'}, draw cap ${cap} m`);
+console.log(`walked ${walked.toFixed(0)} m (${t.toFixed(0)} s at 1.8 m/s), ${trees.length} trees, tier ${low ? 'low' : 'high'}, draw cap ${cap0}..${capAt(L.SPAWN[0], L.SPAWN[1])} m (vista-scaled)`);
 console.log(`GAP    ${gaps} tree-samples (${(100 * gaps / samples).toFixed(2)} %) with no version drawn; ${gapTrees.size} different trees vanish at some point${worst.tr ? `; worst: tree at (${worst.tr.x.toFixed(0)}, ${worst.tr.z.toFixed(0)}) ${worst.d.toFixed(0)} m away` : ''}`);
 console.log(`DOUBLE ${doubles} tree-samples (${(100 * doubles / samples).toFixed(2)} %) drawn by both detail levels`);
 console.log(`FLASH  ${flashes} cell switches that reverse within 3 s`);

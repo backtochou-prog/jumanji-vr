@@ -160,19 +160,27 @@ export function warmShaders(world: World, shadowPass = false): void {
   world.scene.traverse((o) => {
     if (!o.visible && ((o as { isMesh?: boolean }).isMesh || (o as { isSprite?: boolean }).isSprite || (o as { isPoints?: boolean }).isPoints)) hidden.push(o);
   });
+  // IMPORTANT: visibility is only changed for the duration of the (synchronous) compile call and restored in the same tick. three.js collects the
+  // materials inside compile()/compileAsync() right away; only the LINKING is asynchronous (seconds on a Quest). The earlier version restored when the
+  // promise resolved, so for those seconds EVERY hidden object (all LOD versions of every tree, the whole mountain) was drawn, and at the end everything
+  // was forced back to hidden, overriding the LOD system's choices: the world flashed with all of it at once, then trees "respawned". It also ran each
+  // time the player entered VR (the governor calls this).
   for (const o of hidden) o.visible = true;
   const restore = () => {
     for (const o of hidden) o.visible = false;
   };
   const done = () => {
-    restore();
     if (shadowPass) warmShadowPrograms(world);
     console.info(`[jumanji] shader warm-up finished in ${(performance.now() - t0).toFixed(0)} ms (${world.renderer.info.programs?.length ?? '?'} programs)`);
   };
   try {
-    if (r.compileAsync) void r.compileAsync(world.scene, world.camera).then(done, done);
-    else {
+    if (r.compileAsync) {
+      const p = r.compileAsync(world.scene, world.camera);
+      restore(); // materials are already collected: put every object back exactly as it was, now
+      void p.then(done, done);
+    } else {
       r.compile?.(world.scene, world.camera);
+      restore();
       done();
     }
   } catch (e) {

@@ -21,7 +21,7 @@ import {
 } from '@iwsdk/core';
 import type { Material } from '@iwsdk/core';
 import { PAL, ROUGH } from '../../world/palette.js';
-import { leafAtlas } from './leaf-atlas.js';
+import { FOLIAGE_ALPHA_TO_COVERAGE, leafAtlas } from './leaf-atlas.js';
 
 type Hex = `#${string}`;
 
@@ -138,6 +138,32 @@ mountainGroundMaterial.customProgramCacheKey = () => 'mountain-ground-v1';
 // Foliage cards (+ wood parts of plants/trees that must share the draw call)
 // ---------------------------------------------------------------------------
 
+/**
+ * Alpha-to-coverage for the cutout foliage (cards + plants): defined in leaf-atlas.ts (it also softens the atlas' leaf edges), default OFF.
+ * It needs MSAA in the XR layer, which cannot be confirmed from the build machine: check `gl.getParameter(gl.SAMPLES) > 1` on the headset first,
+ * then flip the flag. The alpha-coverage-preserving mips are on either way.
+ */
+export { FOLIAGE_ALPHA_TO_COVERAGE };
+
+/**
+ * Live wind / proximity state for the plant material. Written each frame by ReactiveFoliageSystem; the shader reads it.
+ * `body` = 3 world points (feet and both hands) that push low plants aside.
+ * `time` and `wind` (1, or 0.4 in reduced-motion mode) also drive the tree-wind of `foliageCardMaterial` and the shimmer of `canopyMaterial`.
+ */
+export const swayState = {
+  time: { value: 0 },
+  wind: { value: 1 },
+  body: { value: [new Vector3(0, -999, 0), new Vector3(0, -999, 0), new Vector3(0, -999, 0)] },
+};
+
+/**
+ * Travelling gust front shared by the tree wind and the canopy shimmer: 0..1, a plane wave of ~140 m wavelength sweeping along
+ * (0.83, 0.56) at ~15 m/s. Needs `uTime` declared before it.
+ */
+const GUST_GLSL = `float jgGust( vec2 xz ) {
+  return 0.5 + 0.5 * sin( dot( xz, vec2( 0.83, 0.56 ) ) * 0.045 - uTime * 0.7 );
+}`;
+
 export const foliageCardMaterial = new MeshStandardMaterial({
   name: 'jungle-foliage-card',
   map: leafAtlas(),
@@ -146,26 +172,65 @@ export const foliageCardMaterial = new MeshStandardMaterial({
   metalness: 0,
   side: DoubleSide,
   alphaTest: 0.45,
+  alphaToCoverage: FOLIAGE_ALPHA_TO_COVERAGE,
 });
+/**
+ * Tree wind (vertex work only). Every geometry drawn with this material carries `aWind` = (bend, flutter, phase, vine), all 0..1 (see
+ * WindWeights in lib/geo.ts; mergeParts always writes it, all-zero for rigid parts, so a missing attribute can never read stale data):
+ *   bend     the whole tree leans downwind by up to 0.36 m x weight (weight ~ (y/h)^2 * h/60: 0.3 m at a 50 m crown, mm at the foot), with a
+ *            slow per-position cross-wind sway; wood and leaves share the same weight, so crowns stay attached to their limbs
+ *   flutter  a rigid shiver of up to 0.1 m per card x weight (card phase in aWind.z), stronger in the gust; > 0.5 marks LEAF vertices
+ *   vine     lianas swing like pendulums (free end 0.5 m x weight, phase from world xz) and rise a little as they swing (arc length)
+ * The gust front also modulates leaf brightness by a few per cent (neutral on average). Everything is a pure function of world position and
+ * time, scaled by swayState.wind (reduced motion = 40 %), so the detailed, cheap and far versions of a tree move identically.
+ * The chunk meshes are baked in world space (identity model matrix); `modelMatrix` is only used to place the gust for the few world-placed
+ * assets (entrance canopy, root arch, temple growth).
+ */
 foliageCardMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.uTime = swayState.time;
+  shader.uniforms.uWind = swayState.wind;
   // Cards carry authored soft normals (rounded-mass lighting): use them on BOTH faces instead of flipping.
   shader.fragmentShader = shader.fragmentShader.replace(
     '#include <normal_fragment_begin>',
     '#include <normal_fragment_begin>\n  normal = normalize( vNormal );',
   );
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\nattribute vec4 aWind;\nuniform float uTime;\nuniform float uWind;\n${GUST_GLSL}`)
+    .replace(
+      '#include <color_vertex>',
+      `#include <color_vertex>
+  vec3 jgWp = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+  float jgG = jgGust( jgWp.xz );
+  #ifdef USE_COLOR
+  {
+    // brightness shimmer along the gust front (mean-neutral), plus a slow per-card dapple; leaves only
+    float jgF = jgG * jgG - 0.375;
+    vColor.rgb *= 1.0 + uWind * min( aWind.y * 2.0, 1.0 ) * ( 0.12 * jgF + 0.035 * sin( uTime * 1.9 + aWind.z * 6.2831853 ) );
+  }
+  #endif`,
+    )
+    .replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+  {
+    float jgPh = aWind.z * 6.2831853;
+    vec2 jgDir = vec2( 0.83, 0.56 );
+    vec2 jgSide = vec2( -0.56, 0.83 );
+    float jgSlow = sin( uTime * 0.62 + jgWp.x * 0.071 + jgWp.z * 0.053 );
+    vec2 jgOff = ( jgDir * ( 0.38 + 0.62 * jgG ) + jgSide * 0.32 * jgSlow ) * ( aWind.x * 0.36 );
+    float jgV = aWind.w * pow( max( aWind.w, 0.0001 ), 0.4 );
+    float jgSw = sin( uTime * 1.15 + jgWp.x * 0.55 + jgWp.z * 0.41 + jgPh ) + 0.4 * sin( uTime * 2.3 + jgPh * 1.7 );
+    vec2 jgPend = ( jgDir * ( 0.25 + 0.75 * jgG ) + jgSide * 0.45 * jgSw ) * ( jgV * 0.5 ) * uWind;
+    vec3 jgFl = vec3( sin( uTime * 2.9 + jgPh ), 0.6 * sin( uTime * 3.7 + jgPh * 1.7 + 1.3 ), sin( uTime * 2.3 + jgPh * 2.3 + 4.0 ) )
+      * ( aWind.y * 0.1 * ( 0.45 + 0.9 * jgG ) );
+    transformed.xz += jgOff * uWind + jgPend;
+    transformed.y += dot( jgPend, jgPend ) * 0.09;
+    transformed += jgFl * uWind;
+  }`,
+    );
 };
-foliageCardMaterial.customProgramCacheKey = () => 'jungle-card-v1';
+foliageCardMaterial.customProgramCacheKey = () => 'jungle-card-v2';
 
-
-/**
- * Live wind / proximity state for the plant material. Written each frame by ReactiveFoliageSystem; the shader reads it.
- * `body` = 3 world points (feet and both hands) that push low plants aside.
- */
-export const swayState = {
-  time: { value: 0 },
-  wind: { value: 1 },
-  body: { value: [new Vector3(0, -999, 0), new Vector3(0, -999, 0), new Vector3(0, -999, 0)] },
-};
 
 /**
  * Plants and ground cover: the same atlas material, plus gentle wind sway and a soft push away from the player's body and hands.
@@ -180,6 +245,7 @@ export const plantFoliageMaterial = new MeshStandardMaterial({
   metalness: 0,
   side: DoubleSide,
   alphaTest: 0.45,
+  alphaToCoverage: FOLIAGE_ALPHA_TO_COVERAGE,
 });
 plantFoliageMaterial.onBeforeCompile = (shader) => {
   shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n  normal = normalize( vNormal );');
@@ -215,8 +281,30 @@ plantFoliageMaterial.onBeforeCompile = (shader) => {
 };
 plantFoliageMaterial.customProgramCacheKey = () => 'jungle-plant-sway-v1';
 
-/** Valley canopy: opaque lit crowns, vertex colour only (no texture, no alpha test: zero overdraw cost). */
+/**
+ * Valley canopy: opaque lit crowns, vertex colour only (no texture, no alpha test: zero overdraw cost).
+ * No per-vertex data: the only motion is the gust front's brightness shimmer, a pure function of world position (see `foliageCardMaterial`),
+ * so the carpet of crowns seems to breathe as the wind crosses the valley. The geometry itself stays rigid.
+ */
 export const canopyMaterial = new MeshStandardMaterial({ name: 'mountain-canopy', vertexColors: true, roughness: ROUGH.foliage + 0.1, metalness: 0 });
+canopyMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.uTime = swayState.time;
+  shader.uniforms.uWind = swayState.wind;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\nuniform float uTime;\nuniform float uWind;\n${GUST_GLSL}`)
+    .replace(
+      '#include <color_vertex>',
+      `#include <color_vertex>
+  #ifdef USE_COLOR
+  {
+    vec3 jgWp = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+    float jgG = jgGust( jgWp.xz );
+    vColor.rgb *= 1.0 + uWind * ( 0.14 * ( jgG * jgG - 0.375 ) + 0.03 * sin( uTime * 1.3 + jgWp.x * 0.9 + jgWp.z * 0.7 ) );
+  }
+  #endif`,
+    );
+};
+canopyMaterial.customProgramCacheKey = () => 'mountain-canopy-v2';
 
 /** Cracks of the collapsing ledge: dark, unlit, fades in as the player approaches (opacity driven by CollapseSystem). */
 export const crackMaterial = new MeshBasicMaterial({ name: 'ledge-cracks', color: '#16110c', transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -319,15 +407,28 @@ waterMaterial.onBeforeCompile = (shader) => {
 };
 waterMaterial.customProgramCacheKey = () => 'jungle-water-v2';
 
-/** Falling water: pale, streaky, translucent; scrolled downward by WaterSystem. */
+/**
+ * Shared clock of the falling water (seconds, wrapped at 1024 s), advanced by WaterSystem. A plain object so the DOM-free assets can hold it:
+ * the waterfall shader reads it as `uWClock`. The streak speeds in the shader are multiples of 1/16 per second, so the pattern is seamless at the wrap.
+ */
+export const waterClock = { value: 0 };
+/** 1 = full streak detail, 0 = the cheap path (the 'low' quality tier: one noise layer less). A uniform branch, so no new shader program. */
+export const waterDetail = { value: 1 };
+
+/**
+ * Falling water: pale, streaky, translucent; the texture is scrolled downward by WaterSystem and the shader adds two procedural streak layers
+ * on its own clock (so every fall moves at its own pace whatever the shared texture does), foam at the ledges and the lip, a bright core and
+ * ragged edges. Every sheet carries `aFall` = (lateral -1..1, t 0 (lip) .. 1 (foot), foam 0..1); geometry without it (the pool trickle) gets
+ * (0, -1, 0) from `defaultAttributeValues` and keeps the plain textured look (t < 0 switches the effects off).
+ */
 export const waterfallMaterial = createSceneMaterial({
   id: 'jungle-waterfall',
   model: 'standard',
   baseColor: '#ffffff',
-  emissive: '#9fc9c0',
-  emissiveIntensity: 0.1,
-  opacity: 0.82,
-  roughness: 0.35,
+  emissive: '#a9d3cb',
+  emissiveIntensity: 0.2,
+  opacity: 0.88,
+  roughness: 0.32,
   side: 'double',
   textures: {
     albedo: {
@@ -340,15 +441,91 @@ export const waterfallMaterial = createSceneMaterial({
         { frequency: [150, 9], amplitude: 0.4 },
       ],
       ramp: [
-        { at: 0, color: '#6f9992' },
-        { at: 1, color: '#e9f4f1' },
+        { at: 0, color: '#9bbab3' },
+        { at: 1, color: '#eef7f4' },
       ],
       sampler: { wrapU: 'repeat', wrapV: 'repeat' },
     },
   },
 });
+// One pass for the double-sided sheet: the default would draw every transparent double-sided mesh twice (back faces, then front faces).
+// The falls are single sheets seen from one side, so the extra pass was pure waste (vertex work + a draw call each).
+(waterfallMaterial as MeshStandardMaterial).forceSinglePass = true;
+(waterfallMaterial as unknown as { defaultAttributeValues: Record<string, number[]> }).defaultAttributeValues = { aFall: [0, -1, 0] };
+waterfallMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.uWClock = waterClock;
+  shader.uniforms.uWDetail = waterDetail;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec3 aFall;\nvarying vec3 vFall;\nvarying vec2 vFallUv;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFall = aFall;\nvFallUv = uv;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace(
+      '#include <common>',
+      `#include <common>
+uniform float uWClock;
+uniform float uWDetail;
+varying vec3 vFall;
+varying vec2 vFallUv;
+// Value noise on a 64-cell lattice (wrapped, so the pattern never loses precision however long the clock runs).
+float wfHash( vec2 p ) {
+  vec3 q = fract( vec3( p.xyx ) * 0.1031 );
+  q += dot( q, q.yzx + 33.33 );
+  return fract( ( q.x + q.y ) * q.z );
+}
+float wfNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  vec2 a = mod( i, 64.0 );
+  vec2 b = mod( i + 1.0, 64.0 );
+  return mix( mix( wfHash( a ), wfHash( vec2( b.x, a.y ) ), f.x ), mix( wfHash( vec2( a.x, b.y ) ), wfHash( b ), f.x ), f.y );
+}`,
+    )
+    .replace(
+      '#include <map_fragment>',
+      `#include <map_fragment>
+  float wfOn = step( 0.0, vFall.y );
+  float wfLat = abs( vFall.x );
+  float wfCore = 1.0 - wfLat * wfLat;
+  // vertical phase: the streaks stretch towards the foot (the water speeds up), x is the lateral position in the texture's own units
+  float wfPh = vFallUv.y * ( 1.0 - 0.35 * max( vFall.y, 0.0 ) );
+  float wfA = wfNoise( vec2( vFallUv.x * 11.0, wfPh * 1.1 - uWClock * 1.5 ) );
+  float wfB = 0.5;
+  if ( uWDetail > 0.5 ) wfB = wfNoise( vec2( vFallUv.x * 27.0 + 7.3, wfPh * 2.6 - uWClock * 3.0 ) );
+  float wfStreak = wfA * 0.6 + wfB * 0.4;
+  float wfEdge = 1.0 - smoothstep( 0.5, 0.88, wfLat + ( wfB - 0.5 ) * 0.38 );
+  float wfPulse = 0.78 + 0.22 * sin( 6.2831853 * fract( uWClock * 0.375 + wfPh * 0.37 ) );
+  float wfFoam = clamp( vFall.z * ( 0.35 + 0.9 * wfA ) * wfPulse + smoothstep( 0.72, 1.0, wfLat ) * 0.5 * wfB, 0.0, 1.0 ) * wfOn;
+  diffuseColor.rgb *= mix( 1.0, 0.8 + 0.4 * wfStreak, wfOn );
+  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.97, 1.0, 1.0 ), wfFoam * 0.8 );
+  diffuseColor.a = mix( diffuseColor.a, clamp( diffuseColor.a * ( 0.8 + 0.4 * wfStreak ) * wfEdge + wfFoam * 0.2, 0.0, 1.0 ), wfOn );`,
+    )
+    .replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+  totalEmissiveRadiance *= mix( 1.0, 0.8 + 0.9 * wfCore + 1.2 * wfFoam, wfOn );`,
+    );
+};
+waterfallMaterial.customProgramCacheKey = () => 'jungle-fall-v2';
 
-/** Additive light-shaft / mist cards (vertex-colour brightness only, no alpha texture). */
+/**
+ * Live state of the light shafts / mist cards, written by ShimmerSystem (a plain object: DOM-free, shared by every program that uses the material).
+ * `time` is seconds (already scaled by the Shimmer component's speed), `breath` the depth of the brightness breathing (0 = static).
+ */
+export const lightShaftUniforms = { time: { value: 0 }, breath: { value: 0.22 } };
+
+/**
+ * Additive light-shaft / mist cards (vertex-colour brightness only, no alpha texture, opacity stays 1).
+ * 'light-shaft-v2': a vertex-stage patch makes them LIVE without any fragment cost. Brightness breathes with a phase that depends on the WORLD
+ * position (so neighbouring beams and mist banks never pulse in lockstep; the pulse travels along a beam), and meshes that carry the optional
+ * `aSway` attribute (x = 0 at the base .. 1 at the tip: the merged shafts) lean and drift at their tips. Meshes without it (waterfall mist,
+ * fall mist, ground mist) get aSway = 0 from `defaultAttributeValues`, so they only breathe. Colour is multiplied, alpha is untouched.
+ * Optional `aMist` (vec3, default 0 = inactive; for spray plumes and mist cards): x = height weight (0 at the card's foot .. 1 at its top),
+ * y = rise in OBJECT-space metres, z = phase offset. The card's top then rises and sinks by `x*y*(0.5+0.5*sin(t*0.5+z))`, so a plume heaves
+ * instead of sitting still.
+ * One program, created with the material at module time (the existing warm-up compiles it); the shader uses only modelMatrix, so the
+ * XR multiview path is unaffected.
+ */
 export const lightShaftMaterial = new MeshBasicMaterial({
   name: 'light-shaft',
   vertexColors: true,
@@ -358,6 +535,55 @@ export const lightShaftMaterial = new MeshBasicMaterial({
   side: DoubleSide,
   fog: true,
 });
+// three reads material.defaultAttributeValues generically when a geometry lacks an attribute the program declares
+(lightShaftMaterial as unknown as { defaultAttributeValues: Record<string, number[]> }).defaultAttributeValues = { aSway: [0, 0], aMist: [0, 0, 0] };
+lightShaftMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.uShaftTime = lightShaftUniforms.time;
+  shader.uniforms.uShaftBreath = lightShaftUniforms.breath;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec2 aSway;\nattribute vec3 aMist;\nuniform float uShaftTime;\nuniform float uShaftBreath;')
+    .replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+  {
+    vec3 wp = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+    float ph = uShaftTime * 0.55 + wp.x * 0.11 + wp.z * 0.083;
+    float br = 0.65 * sin( ph ) + 0.35 * sin( uShaftTime * 1.3 + wp.x * 0.37 - wp.z * 0.29 + 1.7 );
+    vColor.rgb *= 1.0 - uShaftBreath * ( 0.5 + 0.5 * br );
+    float tip = aSway.x;
+    transformed.x += tip * 1.1 * sin( uShaftTime * 0.31 + wp.z * 0.07 + wp.y * 0.05 );
+    transformed.z += tip * 0.8 * sin( uShaftTime * 0.27 + wp.x * 0.06 + 1.9 );
+    transformed.y += aMist.x * aMist.y * ( 0.5 + 0.5 * sin( uShaftTime * 0.5 + aMist.z ) );
+  }`,
+    );
+};
+lightShaftMaterial.customProgramCacheKey = () => 'light-shaft-v2';
+
+/**
+ * Waterfall-group addition to the material above: fog ATTENUATES additive light instead of mixing toward the fog colour.
+ * three's fog chunk does `rgb = mix(rgb, fogColor, fogFactor)`, which is right for opaque surfaces but wrong for something ADDED to the frame:
+ * every black vertex of a mist card (its soft edges, the ground disc's rim, the spray-bow's ends) would add `fogColor * fogFactor` (about 0.18 at
+ * the backdrop fall's 122 m with the vista fog) and the whole card would show as a pale rectangle. Here the colour is multiplied by `1 - fogFactor`
+ * (additive light fades into the haze like everything else). Placed after (and wrapping) the vertex patch above; a no-op if the fog chunk was
+ * already replaced. Same program key, no new material (the manifest is at its 16-material budget).
+ */
+{
+  const patchVertex = lightShaftMaterial.onBeforeCompile;
+  lightShaftMaterial.onBeforeCompile = (shader, renderer) => {
+    patchVertex.call(lightShaftMaterial, shader, renderer);
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <fog_fragment>',
+      `#ifdef USE_FOG
+  #ifdef FOG_EXP2
+    float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
+  #else
+    float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+  #endif
+  gl_FragColor.rgb *= 1.0 - fogFactor;
+#endif`,
+    );
+  };
+}
 
 /** Unlit, fogged silhouette material for the background ridges. */
 export const silhouetteMaterial = new MeshBasicMaterial({

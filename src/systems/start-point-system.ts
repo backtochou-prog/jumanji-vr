@@ -1,6 +1,6 @@
 import { createSystem, LocomotionSystem, Vector3 } from '@iwsdk/core';
 import { placePlayer } from '../diagnostics/perf-test.js';
-import { ALTAR, FORD, MTN_VIEWS, SPAWN, terrainHeight } from '../world/layout.js';
+import { ALTAR, FORD, MTN_VIEWS, SPAWN, SPAWN_YAW_DEG, terrainHeight } from '../world/layout.js';
 
 /**
  * Jump-to-area shortcuts for testing (URL only; the normal start is the authored spawn):
@@ -20,7 +20,11 @@ export class StartPointSystem extends createSystem({}) {
     const q = new URLSearchParams(globalThis.location?.search ?? '');
     let xz: [number, number] | null = null;
     const area = q.get('area');
-    if (area === 'entrance') xz = [SPAWN[0], SPAWN[1]];
+    if (area === 'entrance') {
+      xz = [SPAWN[0], SPAWN[1]];
+      if (!q.has('yaw')) this.yaw = SPAWN_YAW_DEG;
+    }
+    if (area === 'gate') xz = [0.3, 3];
     if (q.has('yaw')) this.yaw = Number(q.get('yaw')) || 0;
     if (area === 'trail') xz = [FORD.x + 1.2, FORD.z + 3.0];
     if (area === 'clearing') xz = [0, -52];

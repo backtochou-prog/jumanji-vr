@@ -11,7 +11,7 @@ import { BufferGeometry, Color, Float32BufferAttribute, Mesh, Vector3 } from '@i
 import { fbm, makeRandom, smoothstep } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import { cardGeometry, lerpColor, mat, mergeParts, softNormals, solidUV, tubeAlong } from './lib/geo.js';
-import type { Part } from './lib/geo.js';
+import type { Part, WindFn } from './lib/geo.js';
 import { canopyMaterial, foliageCardMaterial, rockMaterial } from './lib/materials.js';
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,10 @@ export function createVineCurtain(variant: number): Mesh {
       const t = k / 5;
       pts.push(new Vector3(x0 + sway * t * t, -L * t, -0.25 * Math.sin(t * 3.1) - 0.2 * t));
     }
-    parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.035 * (1 - 0.5 * t), 5, 10)), color: stem });
+    // pendulum weight: 0 at the lip .. 1 at the free end, scaled down for short strands (the swing angle stays similar); leaf cards flutter too
+    const fac = Math.min(1, Math.max(0.35, L / 8));
+    const swing = (flutter: number): WindFn => (p) => ({ flutter, vine: Math.min(1, Math.max(0, -p.y / L)) * fac });
+    parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.035 * (1 - 0.5 * t), 5, 10)), color: stem, wind: swing(0) });
     // Leaf cards along the strand: alternating sides, bigger towards the middle.
     const n = Math.round(L / 0.55);
     for (let k = 1; k < n; k++) {
@@ -204,6 +207,7 @@ export function createVineCurtain(variant: number): Mesh {
         m: mat(p.x + side * 0.05, p.y - size * 0.1, p.z, (rng() - 0.5) * 0.4, rng() * Math.PI * 2, (rng() - 0.5) * 0.5).multiply(mat(0, 0, 0, Math.PI, 0, 0)),
         normalFn: softNormals(new Vector3(x0, p.y - 1, -0.3), 0.4),
         color: () => lerpColor(lo, hi, 0.2 + 0.7 * rng()),
+        wind: swing(0.9),
       });
     }
   }

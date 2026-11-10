@@ -19,6 +19,9 @@ import { distToPlayer, inCone, threatDist, wctx, wildlifeStats } from './context
 import { blockedAt, flightClear, obstacleOf, perches, perchesNear } from './perches.js';
 import type { InstanceRig } from './rig.js';
 
+/** Where the opening reveal's macaws look for the waterfall (its foot, world x/z): see IntroSystem. */
+const STAGED_FALL: readonly [number, number] = [4.4, -92];
+
 export const Sp = { Macaw: 0, Toucan: 1, Small: 2 } as const;
 export type SpId = (typeof Sp)[keyof typeof Sp];
 const St = { Perched: 0, Crouch: 1, Flying: 2, Soar: 3 } as const;
@@ -457,7 +460,8 @@ export class Birds {
     wildlifeStats.perched = 0;
 
     // crossing flocks: scheduled, deterministic order, only in the jungle
-    if (now >= this.nextCross && open < 0.3) {
+    if (wctx.intro === 'cross' && open < 0.3 && this.spawnStagedCrossing()) wctx.intro = 'done';
+    if (now >= this.nextCross && open < 0.3 && wctx.intro !== 'hold' && wctx.intro !== 'cross') {
       this.spawnCrossingFlock();
       this.crossIndex++;
       // 25-70 s, a little more often while the player stands still (the jungle "goes on" around them)
@@ -777,6 +781,74 @@ export class Birds {
     wildlifeStats.crossingFlocks++;
     // a short call as the flock appears
     wctx.audio.call(SPECIES[sp].call, x0 + dx * 0.15, y0, z0 + dz * 0.15, sp === Sp.Small ? 0.5 : 0.9);
+  }
+
+  /**
+   * The opening reveal's staged crossing (IntroSystem sets wctx.intro = 'cross'): two scarlet macaws fly slowly across the sky in front of the waterfall, from the
+   * right to the left, 30-55 m ahead and 6-14 m above the player's eyes (so they pass over the lower half of the fall), no matter where the player is looking
+   * (their call as they appear turns the head). Returns true when it is over with (flown, or no clear lane exists: the reveal then simply has no birds);
+   * false = try again next frame (not enough free transient birds yet).
+   */
+  private spawnStagedCrossing(): boolean {
+    const free = this.pool.filter((b) => b.free);
+    if (free.length < 2) return false;
+    const ax = STAGED_FALL[0] - wctx.px;
+    const az = STAGED_FALL[1] - wctx.pz;
+    const al = Math.hypot(ax, az) || 1;
+    const hx = ax / al;
+    const hz = az / al;
+    const rx = -hz; // right of the bearing to the fall
+    const rz = hx;
+    const rng = makeRandom(9777);
+    const half = 36;
+    let found = false;
+    let x0 = 0;
+    let z0 = 0;
+    let x1 = 0;
+    let z1 = 0;
+    let y = 0;
+    for (const ahead of [46, 38, 54, 32]) {
+      for (const rise of [8.5, 11, 6]) {
+        const cx = wctx.px + hx * ahead;
+        const cz = wctx.pz + hz * ahead;
+        x0 = cx + rx * half;
+        z0 = cz + rz * half;
+        x1 = cx - rx * half;
+        z1 = cz - rz * half;
+        y = wctx.py + rise;
+        if (flightClear(x0, y, z0, x1, y, z1, 1.4)) {
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
+    if (!found) return true;
+    const flock = this.flockSeq++;
+    const dx = x1 - x0;
+    const dz = z1 - z0;
+    const L = Math.hypot(dx, dz) || 1;
+    for (let i = 0; i < 2; i++) {
+      const b = free[i];
+      b.sp = Sp.Macaw;
+      b.variant = i;
+      b.flock = flock;
+      this.configure(b);
+      // a pair: the second a few metres behind and to the side
+      const lag = i * 3.2;
+      const off = i * 1.3;
+      const ox = (-dz / L) * off - (dx / L) * lag;
+      const oz = (dx / L) * off - (dz / L) * lag;
+      this.startCross(b, x0 + ox, y + i * 0.6, z0 + oz, x1 + ox, y + 1.5 + i * 0.4, z1 + oz, 7.4 + 0.5 * i, 0.02 * (rng() - 0.5));
+      b.phase = rng() * 6.28;
+      b.flapUntil = wctx.time + 1 + rng();
+      b.glideUntil = 0;
+      b.transient = true;
+    }
+    wildlifeStats.crossingFlocks++;
+    this.nextCross = Math.max(this.nextCross, wctx.time + 30);
+    wctx.audio.call('macaw', x0 + dx * 0.12, y, z0 + dz * 0.12, 0.85);
+    return true;
   }
 
   // ------------------------------------------------------------------ drawing

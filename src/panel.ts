@@ -43,6 +43,9 @@ export class PanelSystem extends createSystem({}) {
     const copyLabel = el<UIKit.Text>('copy-label');
     const soundLabel = el<UIKit.Text>('sound-label');
     const wildlifeLabel = el<UIKit.Text>('wildlife-label');
+    const moreSection = el('more-section');
+    const moreLabel = el<UIKit.Text>('more-label');
+    let moreOpen = false; // the welcome board starts calm: only the greeting, Enter VR and a More toggle
 
     const refreshLabels = () => {
       const c = this.comfort;
@@ -118,6 +121,11 @@ export class PanelSystem extends createSystem({}) {
       this.world.getSystem(WildlifeSystem)?.setEnabled(!wctx.enabled);
       refreshLabels();
     };
+    const onMore = () => {
+      moreOpen = !moreOpen;
+      moreSection?.setProperties({ display: moreOpen ? 'flex' : 'none' });
+      moreLabel?.setProperties({ text: moreOpen ? 'Fewer options' : 'More options' });
+    };
     const onPerf = () => {
       perfOverlay.set(!perfOverlay.enabled);
       refreshLabels();
@@ -130,7 +138,7 @@ export class PanelSystem extends createSystem({}) {
       refreshLabels();
       startPerfTest(this.world, id, { returnToStart: true });
     };
-    for (const [id, fn] of [['perf-button', onPerf], ['copy-button', onCopy], ['test-entrance-button', testBtn('entrance')], ['test-trail-button', testBtn('trail')], ['test-clearing-button', testBtn('clearing')], ['turn-button', onTurn], ['speed-button', onSpeed], ['vignette-button', onVignette], ['move-button', onMove], ['reduced-button', onReduced], ['seated-button', onSeated], ['hazard-button', onHazard], ['quality-button', onQuality], ['sound-button', onSound], ['wildlife-button', onWildlife]] as const) {
+    for (const [id, fn] of [['more-button', onMore], ['perf-button', onPerf], ['copy-button', onCopy], ['test-entrance-button', testBtn('entrance')], ['test-trail-button', testBtn('trail')], ['test-clearing-button', testBtn('clearing')], ['turn-button', onTurn], ['speed-button', onSpeed], ['vignette-button', onVignette], ['move-button', onMove], ['reduced-button', onReduced], ['seated-button', onSeated], ['hazard-button', onHazard], ['quality-button', onQuality], ['sound-button', onSound], ['wildlife-button', onWildlife]] as const) {
       const b = el(id);
       b?.addEventListener('click', fn);
       this.cleanupFuncs.push(() => b?.removeEventListener('click', fn));

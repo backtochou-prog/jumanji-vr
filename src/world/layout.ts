@@ -29,13 +29,68 @@ export { clamp01, fbm, makeRandom, smoothstep, valueNoise };
 // Key places (authored; change here, then `npm run scene:generate`)
 // ---------------------------------------------------------------------------
 
-export const SPAWN: Vec2 = [0.6, 11.5];
+/**
+ * THE START: "Overlook Knoll", a sunlit meadow crown ~7 m above the jungle floor, 120 m from the backdrop waterfall. The player is born here looking
+ * straight at the fall through the widened gate of the two giant trees, with the trail leading down the hill below. (It used to be on the dark forest
+ * floor at [0.6, 11.5].) The knoll stays at x <= 18 and below y = 9 on purpose: AtmosphereSystem only derives `open` (far plane, mountain cells, thin fog)
+ * from the height of a player at x > 18, so the cheap jungle rendering regime is kept.
+ */
+export const SPAWN: Vec2 = [-1.2, 31];
+/** Heading at the start (degrees, 0 = north / -Z, positive = counter-clockwise): faces the waterfall exactly (negative = a small turn to the right). */
+export const SPAWN_YAW_DEG = -2.6;
+
+/**
+ * The knoll. `h` metres of ground rise from `footZ` (where the old jungle floor is untouched: pool, ford, root arch stay as they were) up to the crown at
+ * z = HILL.z; a gentle back-slope falls away to the south. Sideways it is a crown (not a table-top): it fades out between |dx| = w0 and w1.
+ * `walk` is the walkable disc on top (joined to the old walk ellipse by `walkInside`).
+ * Defined before every function that is evaluated at module load (baseHeight -> PATH_HEIGHT, MTN).
+ */
+export const HILL = { x: -1.2, z: 31, footZ: -18, h: 7.0, w0: 3, w1: 54, walk: { cx: -1.2, cz: 25, r: 19 } } as const;
+
+/** Distance from (x, z) to the segment a-b. */
+function segDistance(x: number, z: number, ax: number, az: number, bx: number, bz: number): number {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const u = Math.min(1, Math.max(0, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+  return Math.hypot(x - (ax + dx * u), z - (az + dz * u));
+}
+
+/** Height of the knoll above the old ground (m). Slope <= 0.2 (11 deg) along the ramp; ~0 at footZ and beyond 54 m sideways. */
+export function hillHeight(x: number, z: number): number {
+  const u = Math.min(1, Math.max(0, (z - HILL.footZ) / (HILL.z - HILL.footZ)));
+  // Hermite ramp: slope 0.5 at the foot (so it blends into the old ground), flat on the crown
+  const ramp = z <= HILL.z ? -1.5 * u * u * u + 2 * u * u + 0.5 * u : 1 - 0.3 * smoothstep(0, 22, z - HILL.z);
+  const lat = 1 - smoothstep(HILL.w0, HILL.w1, Math.abs(x - HILL.x));
+  return HILL.h * ramp * lat;
+}
+
+/** 0..1: how much a point belongs to the sunlit knoll meadow (colour, openness, vegetation, light shafts). 1 on the crown, 0 beyond ~27 m. */
+export function hillWeight(x: number, z: number): number {
+  return 1 - smoothstep(15, 27, Math.hypot(x - HILL.x, 0.75 * (z - 22)));
+}
+
+/** The jungle's old rim of "wall hills" is lowered around the knoll (else the crown would be a dimple in a bowl): 0 near the knoll, 1 far from it. */
+function hillWallFactor(x: number, z: number): number {
+  return smoothstep(30, 62, Math.hypot(x - HILL.x, 0.8 * (z - HILL.z)));
+}
+
+/** Macro relief is damped on and around the ramp so the walked slope is the designed one (+-0.02), not the designed one plus noise. */
+function hillCalm(x: number, z: number): number {
+  return 1 - 0.8 * (1 - smoothstep(16, 44, segDistance(x, z, HILL.x, HILL.footZ, HILL.x, 38)));
+}
 
 /** Terrain tile area (metres). Tiles are generated inside this rectangle. */
-export const TERRAIN = { x0: -70, x1: 70, z0: -112, z1: 35 } as const;
+/** `zSouth` is the southern edge of the JUNGLE tiles only (the knoll); the mountain tiles keep `z1`. */
+export const TERRAIN = { x0: -70, x1: 70, z0: -112, z1: 35, zSouth: 62 } as const;
 
 /** Winding dirt trail, from the spawn threshold north into the ancient clearing. */
 export const PATH_POINTS: Vec2[] = [
+  // the new start: from the crown of the knoll down to where the old trail began
+  [-1.2, 47],
+  [-1.2, 34.5],
+  [-1.2, 31],
+  [-0.9, 27],
+  [-0.2, 22],
   [0.6, 17],
   [0.6, 11.5],
   [0.3, 6],
@@ -82,9 +137,14 @@ export const SPIRE = { x: -19, z: -57, h: 50, r: 2.7 * SCALE.spire } as const;
 
 /** Jungle entrance: two colossal trees either side of the trail. */
 export const ENTRANCE_TREES: Vec2[] = [
-  [-6.2, -2.4],
-  [6.6, -4.0],
+  [-11.0, -2.4],
+  [9.6, -4.0],
 ];
+/**
+ * The overhead limb between the gate trees, raised (it used to span at 17-19 m and cut the waterfall's upper half when seen from the knoll's 9 m eye):
+ * the limb springs from the giants at +liftA / +liftB metres above their ground; the thin lower limb sits `lowerLift` m higher than before.
+ */
+export const ENTRANCE_LIMB = { liftA: 21.5, liftB: 23.1, lowerLift: 4.5 } as const;
 
 /** Pool (water feature) left of the trail, with a cascade at its north-west rim. */
 /** `waterY` is derived from the stream's water profile below (the pool is the stream's upper reach). */
@@ -132,6 +192,15 @@ export const CLIFF = { x: 5, z: -96 } as const;
 /** Walkable ellipse (centre + radii). An invisible wall closes it; dense jungle hides it. */
 export const WALK_LIMIT = { cx: 0, cz: -33, rx: 27, rz: 52 };
 
+/**
+ * Is (x, z) inside the walkable region: the old ellipse OR the knoll's disc? (`margin` shrinks both.) The disc ends at x = 17.8, below the x > 18 gate of
+ * AtmosphereSystem's height regime, so standing anywhere on the knoll keeps the jungle rendering regime.
+ */
+export function walkInside(x: number, z: number, margin = 0): boolean {
+  if (Math.hypot((x - WALK_LIMIT.cx) / (WALK_LIMIT.rx - margin), (z - WALK_LIMIT.cz) / (WALK_LIMIT.rz - margin)) <= 1) return true;
+  return Math.hypot(x - HILL.walk.cx, z - HILL.walk.cz) <= HILL.walk.r - margin;
+}
+
 /** Ruined pillars of the ancient clearing (height m, broken = snapped top). */
 export const PILLAR_R = 0.6 * SCALE.pillar;
 export const PILLARS: { x: number; z: number; h: number; broken: boolean; seed: number }[] = [
@@ -145,6 +214,24 @@ export const CORRIDORS: { a: Vec2; b: Vec2; w: number }[] = [
   { a: [0, -50], b: [CLIFF.x, CLIFF.z + 6], w: 5.5 }, // clearing -> waterfall
   { a: [-1, -44], b: [SPIRE.x, SPIRE.z], w: 6.5 }, // trail end -> spire
 ];
+
+/**
+ * The VISTA: the fan of sight from the knoll's eye to the waterfall. A wide wedge (bearings from the start, degrees, + = right) in which NO random tree
+ * stands (every kind: understory and crowns would block the 9 m eye's view of the temple and the fall), plus the foot of the fall and the knoll's glade.
+ * Fixed trees (gate giants, framing giants, the south grove) are exempt: they are the frame. `pad` is the trunk+crown half-width to keep clear.
+ */
+export const VISTA = { leftDeg: -16, rightDeg: 14, nearDist: 8, farDist: 140, fallFoot: [4.4, -92] as Vec2, fallFootR: 16, gladeR: 26 } as const;
+export function inVistaFan(x: number, z: number, pad = 5): boolean {
+  if (Math.hypot(x - VISTA.fallFoot[0], z - VISTA.fallFoot[1]) < VISTA.fallFootR) return true;
+  if (Math.hypot(x - SPAWN[0], z - SPAWN[1]) < VISTA.gladeR) return true;
+  const dx = x - SPAWN[0];
+  const dz = z - SPAWN[1];
+  const d = Math.hypot(dx, dz);
+  if (d < VISTA.nearDist || d > VISTA.farDist || dz >= 0) return false;
+  const bearing = (Math.atan2(dx, -dz) * 180) / Math.PI;
+  const m = (Math.atan(pad / d) * 180) / Math.PI;
+  return bearing >= VISTA.leftDeg - m && bearing <= VISTA.rightDeg + m;
+}
 
 // ---------------------------------------------------------------------------
 // Areas
@@ -174,10 +261,13 @@ export function areaWeights(x: number, z: number): { entrance: number; trail: nu
 /** Dense polyline sampled from PATH_POINTS (Catmull-Rom). */
 export const PATH_SAMPLES: Vec2[] = sampleSpline(PATH_POINTS, 12);
 export const STREAM_SAMPLES: Vec2[] = sampleSpline(STREAM_POINTS, 8);
+/** Index of the sample at the old trail start (the knoll prefix has 5 spline segments of 12 samples). */
+const OLD_START_INDEX = 5 * 12;
 
 /** Path half-width at a sample index (m): wider at the threshold and in the clearing, narrower in the jungle. */
 export function pathHalfWidth(index: number): number {
-  const t = index / (PATH_SAMPLES.length - 1);
+  // fractions refer to the trail from its OLD start ([0.6, 17]) to the clearing, so the knoll prefix does not shift the widths along the rest of the trail
+  const t = (index - OLD_START_INDEX) / (PATH_SAMPLES.length - 1 - OLD_START_INDEX);
   const wide = 0.32 * (1 - smoothstep(0.0, 0.12, t)) + 0.5 * smoothstep(0.86, 1.0, t);
   return 0.95 + 0.13 * Math.sin(index * 0.21 + 1.3) + wide;
 }
@@ -202,7 +292,7 @@ export function nearestStream(x: number, z: number): { dist: number; index: numb
 
 // Precomputed 1 m field for fast lookups (built lazily, identical in every realm).
 const FIELD_CELL = 2;
-const FIELD = { x0: TERRAIN.x0, z0: TERRAIN.z0, cell: FIELD_CELL, nx: Math.ceil((TERRAIN.x1 - TERRAIN.x0) / FIELD_CELL) + 1, nz: Math.ceil((TERRAIN.z1 - TERRAIN.z0) / FIELD_CELL) + 1 };
+const FIELD = { x0: TERRAIN.x0, z0: TERRAIN.z0, cell: FIELD_CELL, nx: Math.ceil((TERRAIN.x1 - TERRAIN.x0) / FIELD_CELL) + 1, nz: Math.ceil((TERRAIN.zSouth - TERRAIN.z0) / FIELD_CELL) + 1 };
 let fieldDist: Float32Array | null = null;
 let fieldT: Float32Array | null = null;
 let fieldHW: Float32Array | null = null;
@@ -225,7 +315,7 @@ function buildField(): void {
 /** Fast (bilinear on a 2 m grid, ~0.2 m accuracy near the trail edge) distance to the trail, with the local half-width and path parameter. */
 export function distanceToPath(x: number, z: number): { dist: number; halfWidth: number; t: number } {
   // The trail lies within x in [-4, 5]: beyond 38 m east/west (and far north/south) nothing depends on the exact value.
-  if (x > 38 || x < -42 || z > 52 || z < -100) return { dist: Math.max(34, Math.abs(x) - 5, z > 0 ? z - 20 : -z - 60), halfWidth: 1, t: z > 0 ? 0 : 1 };
+  if (x > 38 || x < -42 || z > 70 || z < -100) return { dist: Math.max(34, Math.abs(x) - 5, z > 0 ? z - 30 : -z - 60), halfWidth: 1, t: z > 0 ? 0 : 1 };
   const fx = (x - FIELD.x0) / FIELD.cell;
   const fz = (z - FIELD.z0) / FIELD.cell;
   if (fx < 0 || fz < 0 || fx >= FIELD.nx - 1 || fz >= FIELD.nz - 1) return distanceToPathExact(x, z);
@@ -255,12 +345,13 @@ function baseHeight(x: number, z: number): number {
   let h = macroRelief(x, z);
   h += (fbm(x * 0.16, z * 0.16, 9, 2) - 0.5) * 0.36;
   h += (fbm(x * 0.55, z * 0.55, 13, 2) - 0.5) * 0.1;
+  h *= hillCalm(x, z);
   // Gentle, readable ground at the arrival point and in the clearing.
   const dSpawn = Math.hypot(x - SPAWN[0], z - SPAWN[1]);
   h *= 0.3 + 0.7 * smoothstep(3, 14, dSpawn);
   const dClear = Math.hypot(x - CLEARING.x, z - CLEARING.z);
   h *= 0.25 + 0.75 * smoothstep(7, CLEARING.r + 4, dClear);
-  return h;
+  return h + hillHeight(x, z);
 }
 
 /** Smoothed height profile along the trail (so the trail itself never lurches). */
@@ -332,7 +423,8 @@ function jungleHeight(x: number, z: number): number {
 
   // Trail: blend toward a smoothed profile, slightly sunken like a worn path.
   const p = distanceToPath(x, z);
-  const along = 1 - smoothstep(p.halfWidth * 0.9, p.halfWidth * 3.4, p.dist);
+  // (no trail grading on the knoll: its ground is already smooth by construction, and grading toward the smoothed trail profile would carve a ridge into the crown)
+  const along = (1 - smoothstep(p.halfWidth * 0.9, p.halfWidth * 3.4, p.dist)) * (1 - smoothstep(8, 20, z));
   const profile = pathHeightAt(p.t) - 0.045 * (1 - smoothstep(0, p.halfWidth, p.dist));
   h = h * (1 - along) + profile * along;
 
@@ -361,7 +453,7 @@ function jungleHeight(x: number, z: number): number {
 
   // Jungle-wall hills beyond the walkable ellipse.
   const ring = Math.hypot((x - WALK_LIMIT.cx) / WALK_LIMIT.rx, (z - WALK_LIMIT.cz) / WALK_LIMIT.rz);
-  h += smoothstep(0.98, 1.7, ring) * 6.5 * (0.55 + fbm(x * 0.06, z * 0.06, 5, 2));
+  h += smoothstep(0.98, 1.7, ring) * 6.5 * (0.55 + fbm(x * 0.06, z * 0.06, 5, 2)) * hillWallFactor(x, z);
   return h;
 }
 
@@ -482,7 +574,7 @@ export function canopyOpenness(x: number, z: number): number {
   const a = areaWeights(x, z);
   const p = distanceToPath(x, z);
   const nearTrail = 1 - smoothstep(0.5, 5, p.dist);
-  return clamp01(a.clearing * 0.95 + a.trail * (0.2 + 0.2 * nearTrail) + a.entrance * 0.08);
+  return clamp01(Math.max(a.clearing * 0.95 + a.trail * (0.2 + 0.2 * nearTrail) + a.entrance * 0.08, 0.95 * hillWeight(x, z)));
 }
 
 /**
@@ -496,6 +588,7 @@ export function vegetationDensity(x: number, z: number): number {
   let d = 1 - onPath;
   const a = areaWeights(x, z);
   d *= a.entrance * 1.15 + a.trail * 1.0 + a.clearing * 0.3;
+  d *= 1 - 0.75 * hillWeight(x, z); // the knoll is a meadow, not a thicket
   const ds = distanceToStream(x, z);
   d *= 1 - (1 - smoothstep(0.2, 1.2, ds)) * 0.8; // thin right at the waterline
   d *= 1 + 0.25 * (1 - smoothstep(1.5, 5, ds));
@@ -503,19 +596,90 @@ export function vegetationDensity(x: number, z: number): number {
   return d * (0.62 + 0.76 * fbm(x * 0.11, z * 0.11, 21, 3));
 }
 
-/** Soil/moss/stone mix used for the terrain splat and for placing ground cover. */
-export function groundBlend(x: number, z: number, slopeIn?: number): { grass: number; moss: number; litter: number; soil: number; stone: number; mud: number } {
+/** Soil/moss/stone mix used for the terrain splat and for placing ground cover. `meadow` (= hillWeight) and `lush` / `straw` / `drift` (see `meadowFields`) only feed the knoll's colouring. */
+export function groundBlend(
+  x: number,
+  z: number,
+  slopeIn?: number,
+): { grass: number; moss: number; litter: number; soil: number; stone: number; mud: number; meadow: number; lush: number; straw: number; drift: number } {
   const open = canopyOpenness(x, z);
   const n1 = fbm(x * 0.3, z * 0.3, 4, 3);
   const n2 = fbm(x * 1.2, z * 1.2, 8, 2);
   const wet = wetness(x, z);
   const slope = slopeIn ?? terrainSlope(x, z);
   const stone = smoothstep(0.22, 0.4, slope) * 0.8 + smoothstep(0.72, 0.9, n2) * 0.15 * (1 - open);
-  const grass = open * smoothstep(0.3, 0.7, n1) * (1 - wet * 0.6);
-  const moss = (1 - open * 0.6) * (0.45 + 0.5 * smoothstep(0.3, 0.7, n1)) * (0.55 + wet * 0.5);
-  const litter = (1 - open) * smoothstep(0.3, 0.8, n2) * 0.9;
+  let grass = open * smoothstep(0.3, 0.7, n1) * (1 - wet * 0.6);
+  let moss = (1 - open * 0.6) * (0.45 + 0.5 * smoothstep(0.3, 0.7, n1)) * (0.55 + wet * 0.5);
+  let litter = (1 - open) * smoothstep(0.3, 0.8, n2) * 0.9;
   const mud = wet * smoothstep(0.35, 0.8, fbm(x * 0.7, z * 0.7, 17, 2));
-  return { grass, moss, litter, soil: 0.25 + 0.2 * n2, stone: clamp01(stone), mud: clamp01(mud) };
+  // The knoll is a sunlit meadow: grass takes over, moss and leaf litter (jungle floor) fade out.
+  const hw = hillWeight(x, z);
+  let lush = 0;
+  let straw = 0;
+  let drift = 0;
+  if (hw > 0) {
+    const f = meadowFields(x, z);
+    lush = f.lush;
+    straw = f.straw;
+    drift = f.drift;
+    grass += (1 - grass) * hw * 0.85 * (1 - wet * 0.6);
+    moss *= 1 - 0.85 * hw;
+    litter *= 1 - hw;
+  }
+  return { grass, moss, litter, soil: 0.25 + 0.2 * n2, stone: clamp01(stone), mud: clamp01(mud), meadow: hw, lush, straw, drift };
+}
+
+// ---------------------------------------------------------------------------
+// Meadow helpers (Overlook Knoll): shared by the terrain colour, the tuft / flower placement and the tools. Pure, deterministic.
+// ---------------------------------------------------------------------------
+
+/**
+ * The knoll meadow's low-frequency fields, all 0..1: `lush` = fresh green patches (~20 m), `straw` = curing golden grass (~9 m, mostly where it is not lush),
+ * `drift` = wildflower drifts (~6 m blobs, covering roughly a sixth of the meadow). The terrain colours AND the tufts / flowers read the same fields, so a gold
+ * patch of ground carries gold tufts and flowers cluster on their own pale patches.
+ */
+export function meadowFields(x: number, z: number): { lush: number; straw: number; drift: number } {
+  const lush = smoothstep(0.35, 0.65, fbm(x * 0.045, z * 0.045, 41, 3));
+  const straw = smoothstep(0.42, 0.7, fbm(x * 0.11, z * 0.11, 42, 3)) * (1 - lush * 0.6);
+  const drift = smoothstep(0.56, 0.7, fbm(x * 0.16 + 9, z * 0.16 - 4, 43, 3));
+  return { lush, straw, drift };
+}
+
+/**
+ * Placement scale of the knoll's two sandstone monoliths (rock `standing` variants 2 and 3). The monolith prototype is authored at true size (7.0 m and 5.6 m
+ * tall) divided by this factor, so at this scale it is exactly that size, and the collider / AO / exclusion rules of a scaled `standing` stone (footprint
+ * ~ 1.1 x scale, height ~ 1.85 x scale) still fit it.
+ */
+export const MONOLITH_SCALE = 2.3;
+
+/** The start's heading as a unit (x, z) vector (SPAWN_YAW_DEG: 0 = north / -Z, positive = counter-clockwise), and the player's right-hand side. */
+export const KNOLL_FORWARD: Vec2 = [-Math.sin((SPAWN_YAW_DEG * Math.PI) / 180), -Math.cos((SPAWN_YAW_DEG * Math.PI) / 180)];
+export const KNOLL_RIGHT: Vec2 = [Math.cos((SPAWN_YAW_DEG * Math.PI) / 180), -Math.sin((SPAWN_YAW_DEG * Math.PI) / 180)];
+
+/** Unit direction (x, z) the meadow grass leans into: the same push as the wind in plantFoliageMaterial's shader (+x 0.82, +z 0.57), so static lean and sway agree. */
+export const MEADOW_WIND: Vec2 = [0.82 / Math.hypot(0.82, 0.57), 0.57 / Math.hypot(0.82, 0.57)];
+
+/**
+ * Wind-swept grass tufts per square metre at (x, z): thin right at the standing place (0.12 /m2 at 3 m), full from ~9 m, gone by 24 m; fewer behind the
+ * start than in front of it (what the eye sees first); clumpier macro patches; none on or hard against the dirt trail; thinner inside flower drifts.
+ * A tuft is 9-15 triangles, so this is the dial for the meadow's triangle cost.
+ */
+export function meadowTuftDensity(x: number, z: number): number {
+  const dx = x - SPAWN[0];
+  const dz = z - SPAWN[1];
+  const d = Math.hypot(dx, dz);
+  if (d > 24.5 || d < 1.2) return 0;
+  const hw = hillWeight(x, z);
+  if (hw < 0.3) return 0;
+  const yaw = (SPAWN_YAW_DEG * Math.PI) / 180;
+  const c = (dx * -Math.sin(yaw) + dz * -Math.cos(yaw)) / d; // cosine of the bearing from the heading
+  const forward = 0.6 + 0.4 * smoothstep(-0.55, 0.45, c);
+  let dens = (0.12 + 0.38 * smoothstep(2.5, 9, d)) * (1 - smoothstep(16, 24, d)) * forward * 1.15;
+  const f = meadowFields(x, z);
+  dens *= (0.6 + 0.85 * fbm(x * 0.09, z * 0.09, 51, 2)) * (0.85 + 0.35 * f.lush) * (1 - 0.55 * f.drift) * smoothstep(0.3, 0.6, hw);
+  const p = distanceToPath(x, z);
+  dens *= smoothstep(p.halfWidth + 0.15, p.halfWidth + 0.9, p.dist);
+  return dens;
 }
 
 // ---------------------------------------------------------------------------
@@ -602,6 +766,33 @@ export function chunkVisible(cls: ChunkClass, dist: number, low = false, cap = 1
   return nearOk && (was ? dist <= max + h : dist <= max - h);
 }
 
+// ---- Overlook Knoll vista: caps and weights (sky-atmosphere group) ---------------------------------------------------------------------------------
+// AtmosphereSystem thins the jungle fog on the knoll (`vista`, 0..1, POSITION-based: it never depends on height, so it cannot pump with the head or a jump).
+// Thinner fog exposes the hard 100 m cut of the cheap tree cells and the 120 m landmark cap sideways, so both grow with `vista`.
+// tools/asset-stats.mjs and tools/lod-gaps.mjs use these same functions: change a number here and the budget estimate follows.
+
+/** `vista` = 1 within `r0` metres of SPAWN (the crown), falling smoothly to 0 at `r1` (down the ramp, at the gate it is 0): the arrival beat on the way up/down. */
+export const VISTA_RADII = { r0: 10, r1: 32 } as const;
+/** Position-based vista weight (0..1). Pure function of the ground position; no height, no time. */
+export function vistaAt(x: number, z: number): number {
+  return 1 - smoothstep(VISTA_RADII.r0, VISTA_RADII.r1, Math.hypot(x - SPAWN[0], z - SPAWN[1]));
+}
+/** Extra reach (m) of the jungle cell cap (trees-lo / trees-far; every other class stops earlier by itself) at vista = 1: 100 -> 130 m (= viewCap(0), the ceiling) reaches the forest at the foot of the cliff (31 + 94 = 125 m from the crown). */
+export const VISTA_CELL_CAP_EXTRA = 30;
+/** Jungle cell cap for a given vista (continuous; each cell crosses it once, with the 1.5 m hysteresis of `chunkVisible`). */
+export const jungleCellCap = (vista: number): number => JUNGLE_CELL_CAP + VISTA_CELL_CAP_EXTRA * Math.min(1, Math.max(0, vista));
+/** Landmarks (by scene node name) that keep drawing out to this distance (m) while `vista` > VISTA_LANDMARK_ON: the backdrop cliff, its fall and the temple in front of it are ~110 m away from the south end of the knoll. */
+export const JUNGLE_LANDMARK_CAP_NAMED: Readonly<Record<string, number>> = {
+  'Distant cliff': 170,
+  'Distant waterfall': 170,
+  'Pool, stream and puddles': 170,
+  'Overgrown temple': 170,
+  'Temple overgrowth': 170,
+};
+/** `vista` above which the named landmark caps apply (hysteresis: off again below VISTA_LANDMARK_OFF). */
+export const VISTA_LANDMARK_ON = 0.05;
+export const VISTA_LANDMARK_OFF = 0.02;
+
 // ---------------------------------------------------------------------------
 // Repeatable test poses (headset performance tests, ?test= / ?area=)
 // ---------------------------------------------------------------------------
@@ -622,11 +813,13 @@ export interface TestPose {
  *   clearing  the clearing, turned around to look back down the trail
  */
 export const TEST_POSES: Record<'entrance' | 'trail' | 'clearing', TestPose> = {
-  entrance: { id: 'entrance', label: 'Jungle Entrance (down the trail)', x: SPAWN[0], z: SPAWN[1], yawDeg: 0 },
+  entrance: { id: 'entrance', label: 'Overlook Knoll (waterfall vista)', x: SPAWN[0], z: SPAWN[1], yawDeg: SPAWN_YAW_DEG },
   trail: { id: 'trail', label: 'Forest Trail (toward the pool)', x: -1.8, z: -15.6, yawDeg: 51 },
   clearing: { id: 'clearing', label: 'Ancient Clearing (looking back)', x: 0, z: -57.5, yawDeg: 180 },
 };
 export type TestId = keyof typeof TEST_POSES;
+/** The old dense worst case, kept for the budget estimate: down the ramp, the gate ahead (not a headset test button). */
+export const GATE_POSE: TestPose = { id: 'gate', label: 'Hill ramp (gate ahead)', x: 0.6, z: 6, yawDeg: 0 };
 
 /**
  * Height the temple's base sits at: the LOWEST ground under its footprint (so a platform 28 m wide never hangs over a dip; on the high side the

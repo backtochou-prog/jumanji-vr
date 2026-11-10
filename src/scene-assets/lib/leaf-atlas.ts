@@ -14,6 +14,15 @@ import { DataTexture, LinearFilter, LinearMipmapLinearFilter, RGBAFormat, SRGBCo
 import { makeRandom } from '../../world/layout.js';
 
 export const ATLAS_SIZE = 512;
+
+/**
+ * Alpha-to-coverage on the cutout foliage (read by materials.ts). Default OFF: it needs MSAA in the XR layer, which cannot be confirmed
+ * without a headset. When on, the leaf-edge soft ramps below widen a little (0.02 -> 0.03) so the coverage mask has a gradient to work with.
+ */
+export const FOLIAGE_ALPHA_TO_COVERAGE = false;
+const EDGE_SOFT = FOLIAGE_ALPHA_TO_COVERAGE ? 0.03 : 0.02;
+/** The alpha-test threshold of the foliage materials (materials.ts: alphaTest). */
+const ALPHA_CUT = 0.45;
 const GRID = 4; // 4 x 4 tiles of 128 px
 const TILE = ATLAS_SIZE / GRID;
 const PAD = 5; // transparent margin (px) so mip-mapping does not bleed neighbours
@@ -101,7 +110,7 @@ const painters: Record<LeafTile, (u: number, v: number) => Pix> = {
     const ax = Math.abs(x);
     const lf = Math.sin((v * 26 - ax * 9) * Math.PI);
     const leaflet = sstep(-0.18, 0.32, lf);
-    const a = Math.max(cover(ax - 0.012, 0.01) * 0.95, cover(ax - env, 0.02) * leaflet * sstep(0.02, 0.05, ax)) * (v > 0.01 && v < 0.99 ? 1 : 0);
+    const a = Math.max(cover(ax - 0.012, 0.01) * 0.95, cover(ax - env, EDGE_SOFT) * leaflet * sstep(0.02, 0.05, ax)) * (v > 0.01 && v < 0.99 ? 1 : 0);
     const shade = 0.55 + 0.35 * leaflet + (ax < 0.014 ? 0.25 : 0);
     return { r: shade * 0.85, g: shade, b: shade * 0.6, a };
   },
@@ -113,7 +122,7 @@ const painters: Record<LeafTile, (u: number, v: number) => Pix> = {
     const lf = Math.sin((v * 30 - ax * 7) * Math.PI);
     const sub = Math.sin((v * 30 - ax * 7) * Math.PI * 3.2 + ax * 40);
     const leaflet = sstep(-0.1, 0.35, lf) * (0.78 + 0.22 * sstep(-0.4, 0.4, sub));
-    const a = Math.max(cover(ax - 0.01, 0.008) * 0.95, cover(ax - env, 0.02) * leaflet * sstep(0.015, 0.04, ax)) * (v > 0.01 && v < 0.99 ? 1 : 0);
+    const a = Math.max(cover(ax - 0.01, 0.008) * 0.95, cover(ax - env, EDGE_SOFT) * leaflet * sstep(0.015, 0.04, ax)) * (v > 0.01 && v < 0.99 ? 1 : 0);
     const shade = 0.5 + 0.38 * leaflet + (ax < 0.012 ? 0.2 : 0);
     return { r: shade * 0.8, g: shade, b: shade * 0.5, a };
   },
@@ -124,7 +133,7 @@ const painters: Record<LeafTile, (u: number, v: number) => Pix> = {
     const env = 0.47 * Math.pow(Math.sin(Math.PI * Math.pow(clamp(v), 0.65)), 0.75) * (1 - 0.25 * v);
     const lf = Math.sin((v * 17 - ax * 6) * Math.PI);
     const leaflet = sstep(-0.35, 0.2, lf);
-    const a = Math.max(cover(ax - 0.014, 0.01), cover(ax - env, 0.02) * leaflet * sstep(0.02, 0.05, ax)) * (v > 0.01 && v < 0.99 ? 1 : 0);
+    const a = Math.max(cover(ax - 0.014, 0.01), cover(ax - env, EDGE_SOFT) * leaflet * sstep(0.02, 0.05, ax)) * (v > 0.01 && v < 0.99 ? 1 : 0);
     const shade = 0.58 + 0.3 * leaflet;
     return { r: shade * 0.82, g: shade, b: shade * 0.55, a };
   },
@@ -288,6 +297,124 @@ const painters: Record<LeafTile, (u: number, v: number) => Pix> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Alpha-coverage-preserving mip pyramid
+// ---------------------------------------------------------------------------
+
+const SRGB_TO_LIN = (() => {
+  const t = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const c = i / 255;
+    t[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+  return t;
+})();
+/** linear 0..1 -> sRGB byte through a 16384-entry table (cheaper than pow per texel; ~0.2 of a byte step at worst). */
+const LIN_TO_SRGB = (() => {
+  const n = 16384;
+  const t = new Uint8Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    const c = i / n;
+    t[i] = Math.round(clamp(c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055) * 255);
+  }
+  return t;
+})();
+const linToSrgb8 = (c: number): number => LIN_TO_SRGB[Math.round(clamp(c) * 16384)];
+
+/**
+ * The plain box-filtered mips of an alpha-TESTED texture lose coverage: thin leaflets average to alpha well under the 0.45 cut, so a distant
+ * crown thins out and its edges crawl. Here every level is built from the one above with
+ *   - colour averaged in linear space and weighted by alpha (the black texels of the transparent margin do not darken leaf edges), and
+ *   - per TILE and level an alpha gain g chosen so that the fraction of texels passing the alpha test (alpha >= 0.45) equals level 0's:
+ *     with the tile's raw alphas sorted, the k-th largest is lifted exactly to the cut (g = 0.45 / a_k, k = coverage0 x texels, clamped 1..8).
+ * Tiles are 128 px with a 5 px margin, so tiles stay separate down to a 2 px tile (level 6); from level 7 (1 px per tile) the previous gain is
+ * kept and the last two levels (2x2, 1x1 for the whole atlas, never sampled by a visible card) are plain averages.
+ * Deterministic, ~2 M simple operations, no DOM. Returns levels 0..9 (512 .. 1 px) in the DataTexture `mipmaps` format.
+ */
+export function buildMips(base: Uint8Array): { data: Uint8Array; width: number; height: number }[] {
+  const out = [{ data: base, width: ATLAS_SIZE, height: ATLAS_SIZE }];
+  const tiles = GRID * GRID;
+  // level-0 coverage per tile (fraction of texels that pass the alpha test)
+  const cov0 = new Float32Array(tiles);
+  for (let ty = 0; ty < GRID; ty++) {
+    for (let tx = 0; tx < GRID; tx++) {
+      let n = 0;
+      for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) if (base[((ty * TILE + y) * ATLAS_SIZE + tx * TILE + x) * 4 + 3] / 255 >= ALPHA_CUT) n++;
+      cov0[ty * GRID + tx] = n / (TILE * TILE);
+    }
+  }
+  // working copies of the previous level: linear rgb and RAW (ungained) alpha, 0..1
+  let size = ATLAS_SIZE;
+  let rgb = new Float32Array(size * size * 3);
+  let alpha = new Float32Array(size * size);
+  for (let i = 0; i < size * size; i++) {
+    rgb[i * 3] = SRGB_TO_LIN[base[i * 4]];
+    rgb[i * 3 + 1] = SRGB_TO_LIN[base[i * 4 + 1]];
+    rgb[i * 3 + 2] = SRGB_TO_LIN[base[i * 4 + 2]];
+    alpha[i] = base[i * 4 + 3] / 255;
+  }
+  const gain = new Float32Array(tiles).fill(1);
+  for (let level = 1; size > 1; level++) {
+    const ns = size >> 1;
+    const nrgb = new Float32Array(ns * ns * 3);
+    const nalpha = new Float32Array(ns * ns);
+    for (let y = 0; y < ns; y++) {
+      for (let x = 0; x < ns; x++) {
+        const i0 = 2 * y * size + 2 * x;
+        const i1 = i0 + 1;
+        const i2 = i0 + size;
+        const i3 = i2 + 1;
+        const a0 = alpha[i0];
+        const a1 = alpha[i1];
+        const a2 = alpha[i2];
+        const a3 = alpha[i3];
+        const sa = a0 + a1 + a2 + a3;
+        const o = y * ns + x;
+        nalpha[o] = sa * 0.25;
+        for (let c = 0; c < 3; c++) {
+          const c0 = rgb[i0 * 3 + c];
+          const c1 = rgb[i1 * 3 + c];
+          const c2 = rgb[i2 * 3 + c];
+          const c3 = rgb[i3 * 3 + c];
+          // alpha-weighted; a fully transparent block just averages its (margin) colours
+          nrgb[o * 3 + c] = sa > 1e-5 ? (c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3) / sa : (c0 + c1 + c2 + c3) * 0.25;
+        }
+      }
+    }
+    // coverage-preserving alpha gain per tile (while a tile is still at least 2 px wide)
+    const ts = TILE >> level;
+    if (ts >= 2) {
+      for (let ty = 0; ty < GRID; ty++) {
+        for (let tx = 0; tx < GRID; tx++) {
+          const vals = new Float32Array(ts * ts);
+          for (let y = 0; y < ts; y++) for (let x = 0; x < ts; x++) vals[y * ts + x] = nalpha[(ty * ts + y) * ns + tx * ts + x];
+          vals.sort(); // ascending
+          const k = Math.round(cov0[ty * GRID + tx] * ts * ts);
+          const ak = k > 0 ? vals[ts * ts - k] : 0; // the k-th largest raw alpha
+          gain[ty * GRID + tx] = ak > 1e-4 ? clamp(ALPHA_CUT / ak, 1, 8) : 1;
+        }
+      }
+    }
+    const data = new Uint8Array(ns * ns * 4);
+    for (let y = 0; y < ns; y++) {
+      for (let x = 0; x < ns; x++) {
+        const o = y * ns + x;
+        const tile = level <= 7 ? Math.min(GRID - 1, Math.floor((y * GRID) / ns)) * GRID + Math.min(GRID - 1, Math.floor((x * GRID) / ns)) : -1;
+        const gn = tile >= 0 ? gain[tile] : 1;
+        data[o * 4] = linToSrgb8(nrgb[o * 3]);
+        data[o * 4 + 1] = linToSrgb8(nrgb[o * 3 + 1]);
+        data[o * 4 + 2] = linToSrgb8(nrgb[o * 3 + 2]);
+        data[o * 4 + 3] = Math.round(clamp(nalpha[o] * gn) * 255);
+      }
+    }
+    out.push({ data, width: ns, height: ns });
+    rgb = nrgb;
+    alpha = nalpha;
+    size = ns;
+  }
+  return out;
+}
+
 function buildAtlas(): DataTexture {
   const data = new Uint8Array(ATLAS_SIZE * ATLAS_SIZE * 4);
   for (const [name, idx] of Object.entries(TILE_INDEX) as [LeafTile, number][]) {
@@ -309,7 +436,9 @@ function buildAtlas(): DataTexture {
   }
   const tex = new DataTexture(data, ATLAS_SIZE, ATLAS_SIZE, RGBAFormat, UnsignedByteType);
   tex.colorSpace = SRGBColorSpace;
-  tex.generateMipmaps = true;
+  // Hand-built pyramid (level 0 included, down to 1x1): alpha-weighted colour and per-tile coverage-preserving alpha, see buildMips.
+  tex.mipmaps = buildMips(data);
+  tex.generateMipmaps = false;
   tex.minFilter = LinearMipmapLinearFilter;
   tex.magFilter = LinearFilter;
   tex.anisotropy = 4;

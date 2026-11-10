@@ -11,7 +11,7 @@
  * + margin of the trail centre-line (tools/validate-scene.mjs proves it).
  */
 import { BoxGeometry, CylinderGeometry, IcosahedronGeometry, Matrix4, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from '@iwsdk/core';
-import { ALTAR, ALTAR_TOP_Y, FALLEN_GIANT, MTN_GUARDS, PILLARS, PILLAR_R, TEMPLE_BASE, ROOT_ARCH, SPIRE, TEMPLE, WALK_LIMIT, ringOpening, terrainHeight } from '../world/layout.js';
+import { ALTAR, ALTAR_TOP_Y, FALLEN_GIANT, MTN_GUARDS, PILLARS, PILLAR_R, TEMPLE_BASE, ROOT_ARCH, SPIRE, TEMPLE, WALK_LIMIT, HILL, ringOpening, terrainHeight } from '../world/layout.js';
 import { BAKED } from '../world/baked.js';
 import { mat, mergeParts } from './lib/geo.js';
 import type { Part } from './lib/geo.js';
@@ -27,17 +27,32 @@ export function createColliders(): Mesh {
   /** Horizontal cylinder along local X, yawed. */
   const lying = (x: number, y: number, z: number, r: number, len: number, yaw: number) => parts.push({ geo: new CylinderGeometry(r, r, len, 8), m: mat(x, y, z, 0, yaw, Math.PI / 2), color: white });
 
-  // Boundary wall: a closed ring of overlapping boxes around the walkable ellipse.
-  const N = 330;
-  for (let i = 0; i < N; i++) {
-    const a = (i / N) * Math.PI * 2;
-    const x = WALK_LIMIT.cx + Math.cos(a) * WALK_LIMIT.rx;
-    const z = WALK_LIMIT.cz + Math.sin(a) * WALK_LIMIT.rz;
-    const tx = -Math.sin(a) * WALK_LIMIT.rx;
-    const tz = Math.cos(a) * WALK_LIMIT.rz;
-    const len = (Math.hypot(tx, tz) * (Math.PI * 2)) / N + 0.4;
-    if (ringOpening(x, z)) continue; // the mountain route leaves the jungle here
-    box(x, terrainHeight(x, z) + 4, z, len, 12, 1.4, Math.atan2(-tz, tx));
+  // Boundary wall: a closed ring of overlapping boxes around the walkable region = the old ellipse UNION the knoll's disc. Ring pieces that lie inside
+  // the other shape are skipped, so the two outlines merge into one closed boundary.
+  {
+    const N = 330;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      const x = WALK_LIMIT.cx + Math.cos(a) * WALK_LIMIT.rx;
+      const z = WALK_LIMIT.cz + Math.sin(a) * WALK_LIMIT.rz;
+      const tx = -Math.sin(a) * WALK_LIMIT.rx;
+      const tz = Math.cos(a) * WALK_LIMIT.rz;
+      const len = (Math.hypot(tx, tz) * (Math.PI * 2)) / N + 0.4;
+      if (ringOpening(x, z)) continue; // the mountain route leaves the jungle here
+      if (Math.hypot(x - HILL.walk.cx, z - HILL.walk.cz) < HILL.walk.r + 0.8) continue; // inside the knoll disc
+      box(x, terrainHeight(x, z) + 4, z, len, 12, 1.4, Math.atan2(-tz, tx));
+    }
+    const M = 130;
+    for (let i = 0; i < M; i++) {
+      const a = (i / M) * Math.PI * 2;
+      const x = HILL.walk.cx + Math.cos(a) * HILL.walk.r;
+      const z = HILL.walk.cz + Math.sin(a) * HILL.walk.r;
+      if (Math.hypot((x - WALK_LIMIT.cx) / (WALK_LIMIT.rx + 0.6), (z - WALK_LIMIT.cz) / (WALK_LIMIT.rz + 0.6)) < 1) continue; // inside the old ellipse
+      const tx = -Math.sin(a) * HILL.walk.r;
+      const tz = Math.cos(a) * HILL.walk.r;
+      const len = (Math.hypot(tx, tz) * (Math.PI * 2)) / M + 0.4;
+      box(x, terrainHeight(x, z) + 4, z, len, 12, 1.4, Math.atan2(-tz, tx));
+    }
   }
   // Tree trunks.
   for (const [x, y, z, r] of BAKED.trees) {

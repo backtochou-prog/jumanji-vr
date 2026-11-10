@@ -155,6 +155,7 @@ function sheet(profile: { d: number; h: number }[], rows: number, widthAt: (t: n
   const lz = ax;
   const positions: number[] = [];
   const uvs: number[] = [];
+  const fall: number[] = []; // aFall = (lateral -1 | +1, t, foam): read by the waterfall shader, which every sheet must feed
   const indices: number[] = [];
   for (let k = 0; k <= rows; k++) {
     const t = k / rows;
@@ -169,6 +170,9 @@ function sheet(profile: { d: number; h: number }[], rows: number, widthAt: (t: n
     const w = widthAt(t) + lateral;
     positions.push(base[0] - lx * w, p.h + nh * off, base[1] - lz * w, base[0] + lx * w, p.h + nh * off, base[1] + lz * w);
     uvs.push(0, t * (L / vScale), uTiles, t * (L / vScale));
+    // white water where the fall leaves the lip and where it lands
+    const foam = Math.max(0.4 * (1 - Math.min(1, t / 0.04)), 0.9 * Math.min(1, Math.max(0, (t - 0.9) / 0.1)));
+    fall.push(-1, t, foam, 1, t, foam);
   }
   for (let i = 0; i < rows; i++) {
     const a = i * 2;
@@ -177,6 +181,7 @@ function sheet(profile: { d: number; h: number }[], rows: number, widthAt: (t: n
   const g = new BufferGeometry();
   g.setAttribute('position', new Float32BufferAttribute(positions, 3));
   g.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  g.setAttribute('aFall', new Float32BufferAttribute(fall, 3));
   g.setIndex(indices);
   g.computeVertexNormals();
   g.computeBoundingBox();
@@ -206,6 +211,7 @@ function mergeSheets(meshes: Mesh[], name: string): Mesh {
   const pos = new Float32Array(vc * 3);
   const nor = new Float32Array(vc * 3);
   const uv = new Float32Array(vc * 2);
+  const fall = new Float32Array(vc * 3);
   const idx = new Uint32Array(ic);
   let vo = 0;
   let io = 0;
@@ -214,6 +220,7 @@ function mergeSheets(meshes: Mesh[], name: string): Mesh {
     pos.set(g.getAttribute('position').array as Float32Array, vo * 3);
     nor.set(g.getAttribute('normal').array as Float32Array, vo * 3);
     uv.set(g.getAttribute('uv').array as Float32Array, vo * 2);
+    fall.set(g.getAttribute('aFall').array as Float32Array, vo * 3);
     for (let i = 0; i < g.index!.count; i++) idx[io + i] = g.index!.getX(i) + vo;
     io += g.index!.count;
     vo += g.getAttribute('position').count;
@@ -222,6 +229,7 @@ function mergeSheets(meshes: Mesh[], name: string): Mesh {
   geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
   geo.setAttribute('normal', new Float32BufferAttribute(nor, 3));
   geo.setAttribute('uv', new Float32BufferAttribute(uv, 2));
+  geo.setAttribute('aFall', new Float32BufferAttribute(fall, 3));
   geo.setIndex(new Uint32BufferAttribute(idx, 1));
   geo.computeBoundingBox();
   geo.computeBoundingSphere();

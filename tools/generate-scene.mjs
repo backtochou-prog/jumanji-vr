@@ -24,7 +24,7 @@ import * as L from '../src/world/layout.ts';
 import * as P from '../src/world/placements.ts';
 import * as M from '../src/world/mountain.ts';
 import * as MP from '../src/world/mountain-placements.ts';
-import { FOG_COLOR, SUN_DIR } from '../src/world/palette.ts';
+import { FOG_COLOR, SUN_DIR, LIGHT } from '../src/world/palette.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(here, '../public/scenes/main.iwsdk.scene.json');
@@ -103,7 +103,7 @@ const toAltar = [L.ALTAR[0] - L.CLIFF.x, L.ALTAR[1] - L.CLIFF.z];
 const cliffYaw = r(deg(Math.atan2(toAltar[0], toAltar[1])), 2);
 const cliffT = { position: [L.CLIFF.x, -2, L.CLIFF.z], rotationDeg: [0, cliffYaw, 0], scale: 1 };
 nodes.push({ id: 'cliff', name: 'Distant cliff', framingRole: 'support', content: { type: 'asset', asset: 'cliff' }, transform: cliffT });
-nodes.push({ id: 'waterfall', name: 'Distant waterfall', content: { type: 'asset', asset: 'waterfall' }, transform: cliffT, components: { ScrollTexture: { speedU: 0, speedV: -0.55 } } });
+nodes.push({ id: 'waterfall', name: 'Distant waterfall', content: { type: 'asset', asset: 'waterfall' }, transform: cliffT, components: { ScrollTexture: { speedU: 0, speedV: -0.7 } } });
 for (let i = 0; i < 3; i++) nodes.push({ id: `ridge-${i}`, name: `Background ridge ${i}`, framingRole: 'support', content: { type: 'asset', asset: `ridge-${i}` } });
 
 // ---- mountain expedition ----------------------------------------------------------------------------------
@@ -146,6 +146,8 @@ scatter('plants', (p) => `fern-cluster-${p.variant % 3}`, plantsOf('fern'));
 // Ground cover is composed into 4 patch assets: meadow (clearing), grass+clover, woodland floor, mossy floor.
 const patchId = { flowers: () => 'patch-0', cover: (p) => `patch-${1 + (p.variant % 2) * 1}`, litter: () => 'patch-2', moss: () => 'patch-3' };
 for (const kind of ['flowers', 'cover', 'litter', 'moss']) scatter('ground', patchId[kind], plantsOf(kind));
+// The knoll meadow: wind-swept opaque tufts (variants 0-3) and wildflower clumps (4-7), their own prototypes in the ground cells.
+scatter('ground', (p) => (p.variant < 4 ? `meadow-tuft-${p.variant}` : `meadow-flowers-${p.variant - 4}`), plantsOf('meadow'));
 for (const kind of ['treefern', 'broadleaf', 'shrub', 'palm', 'reed', 'pads']) scatter('plants', (p) => `${kind}-${p.variant % P.PLANT_VARIANTS[kind]}`, plantsOf(kind));
 scatter('plants', (p) => `vine-${p.variant % 3}`, MP.mountainVines());
 
@@ -153,7 +155,8 @@ scatter('plants', (p) => `vine-${p.variant % 3}`, MP.mountainVines());
 const ROCKS = { boulder: 2, slab: 1, standing: 1, cobble: 2 };
 const allRocks = [...P.rockPlacements(), ...MP.mountainRocks()];
 const allDead = [...P.deadwoodPlacements(), ...MP.mountainDeadwood()];
-scatter('rocks', (p) => `rock-${p.kind}-${p.variant % ROCKS[p.kind]}`, allRocks);
+// (the knoll's own sunlit boulders / monoliths / lookout stone / pebbles name their prototype explicitly: p.fixedVariant, see placements.ts knollDressing)
+scatter('rocks', (p) => `rock-${p.kind}-${p.fixedVariant ?? p.variant % ROCKS[p.kind]}`, allRocks);
 scatter('deadwood', (p) => `${p.kind}-${p.variant % 2}`, allDead);
 scatter('deadwood', (p) => `roots-${p.variant % 2}`, [...P.rootPlacements(), ...MP.mountainRoots()]);
 // Mountain far field: tree crowns seen from above (valley + ridge) and the rock towers (64 m cells).
@@ -208,14 +211,21 @@ nodes.push({
 
 // ---- atmosphere ----------------------------------------------------------------------------------
 // Light shafts (one merged mesh) lean along -SUN_DIR and sit in measured canopy gaps; ground mist likewise.
-const shafts = P.lightShafts();
+const shafts = [...P.lightShafts(), ...P.vistaShafts()];
 nodes.push({ id: 'light-shafts', name: 'Light shafts', content: { type: 'asset', asset: 'light-shafts' }, components: { Shimmer: { speed: 0.3, amount: 0.22 } } });
 nodes.push({ id: 'ground-mists', name: 'Ground mist', content: { type: 'asset', asset: 'ground-mists' } });
 
 // ---- spatial UI + lights -----------------------------------------------------------------------------
-const panelT = { position: [r(L.SPAWN[0] + 1.9), 1.5, r(L.SPAWN[1] - 3.0)], rotationDeg: [0, -30, 0], scale: 0.24 };
+// The board stands on a lectern stone to the right of the view (70 degrees off the heading, 2.3 m out: found by turning the head, never in the way of the fall).
+// It floats 1.2 m above the GROUND at its own spot (the start is on a hill: an absolute height would bury it or float it), faces the start point and leans
+// back 22 degrees like a reading stand. Scale 0.30 (UIKit units are cm): body text 20 px = 6 cm = 1.5 degrees at 2.3 m, the heading 2.5 degrees.
+const lectern = P.lecternSpot();
+const panelXZ = [lectern.x, lectern.z];
+const panelRot = euler(mul(Ry(lectern.faceYaw), Rx((-22 * Math.PI) / 180)));
+const panelT = { position: [r(panelXZ[0]), r(groundY(...panelXZ) + 1.2), r(panelXZ[1])], rotationDeg: panelRot, scale: 0.3 };
 nodes.push({ id: 'welcome-panel', name: 'Expedition board', content: { type: 'asset', asset: 'welcome-panel' }, transform: panelT, components: { RayInteractable: {} } });
-const sunPos = [L.ALTAR[0] + 20, 30, L.ALTAR[1] + 10];
+// (ShadowFollowSystem re-places the sun every time the player moves; this is only where it starts: 40 m toward the sun from the altar.)
+const sunPos = [r(L.ALTAR[0] - SUN_DIR[0] * 40), r(groundY(...L.ALTAR) - SUN_DIR[1] * 40), r(L.ALTAR[1] - SUN_DIR[2] * 40)];
 nodes.push({
   id: 'sun',
   name: 'Sun',
@@ -223,8 +233,8 @@ nodes.push({
   transform: { position: sunPos, rotationDeg: euler(fromTo([0, 0, -1], SUN_DIR)) },
   components: {
     DirectionalLight: {
-      color: [1, 0.9, 0.72, 1],
-      intensity: 3.1,
+      color: [...LIGHT.sunColor, 1],
+      intensity: LIGHT.sunIntensity,
       castShadow: true,
       shadowMapSize: '1024',
       shadowCameraSize: 8, // 8 m window / 1024 px = 7.8 mm texels: a 1 m world step is a whole 128 texels (ShadowFollowSystem snaps to texels)
@@ -236,12 +246,13 @@ nodes.push({
     },
   },
 });
-nodes.push({ id: 'canopy-fill', name: 'Canopy fill', components: { HemisphereLight: { skyColor: [0.5, 0.72, 0.62, 1], groundColor: [0.17, 0.2, 0.1, 1], intensity: 1.25 } } });
+nodes.push({ id: 'canopy-fill', name: 'Canopy fill', components: { HemisphereLight: { skyColor: [...LIGHT.hemiSky, 1], groundColor: [...LIGHT.hemiGround, 1], intensity: LIGHT.hemiIntensity } } });
 
 // ---- authoring views at standing eye height ------------------------------------------------------------
 const eye = (x, z, tx, ty, tz, id, fov = 78) => ({ id, role: 'diagnostic', projection: 'perspective', position: [x, r(groundY(x, z) + 1.65), z], target: [tx, ty, tz], fov });
 const views = [
-  { id: 'hero', role: 'hero', projection: 'perspective', position: [L.SPAWN[0], r(groundY(...L.SPAWN) + 1.65), L.SPAWN[1]], target: [L.ENTRANCE_TREES[0][0] + 4, 3.0, -8], fov: 78 },
+  { id: 'hero', role: 'hero', projection: 'perspective', position: [L.SPAWN[0], r(groundY(...L.SPAWN) + 1.65), L.SPAWN[1]], target: [4.3, 30, -91], fov: 78 },
+  { id: 'v-vista', role: 'diagnostic', projection: 'perspective', position: [L.SPAWN[0], r(groundY(...L.SPAWN) + 1.65), L.SPAWN[1]], target: [2, 22, -91], fov: 70 },
   eye(0.2, 5.5, 0.2, 3, -12, 'v-entrance'),
   eye(0.0, -6.0, -2.2, 2.5, -20, 'v-gate-inside'),
   eye(-3.0, -16.5, -1.2, 1.2, -26, 'v-trail-a'),
@@ -315,17 +326,19 @@ const scene = {
   version: 'iwsdk.scene.v1',
   units: 'meters',
   components: {
-    'com.iwsdk.components.DomeGradient': { sky: [0.3, 0.55, 0.58, 1], equator: [0.66, 0.77, 0.7, 1], ground: [0.12, 0.17, 0.1, 1], elevationDeg: 32, azimuthDeg: 110, dither: true },
-    'com.iwsdk.components.IBLGradient': { sky: [0.36, 0.52, 0.5, 1], equator: [0.36, 0.46, 0.36, 1], ground: [0.1, 0.13, 0.07, 1], intensity: 0.72 },
+    // Light rig = palette.ts LIGHT_PRESETS[ACTIVE_LIGHT] (golden hour; 'noon' recovers the old look). AtmosphereSystem overwrites the dome's sky/equator/elevation at runtime.
+    'com.iwsdk.components.DomeGradient': { sky: [...LIGHT.domeSky, 1], equator: [...LIGHT.domeEquator, 1], ground: [...LIGHT.domeGround, 1], elevationDeg: 32, azimuthDeg: LIGHT.domeAzimuthDeg, dither: true },
+    // IBL is baked ONCE (PMREM): never animate it at runtime.
+    'com.iwsdk.components.IBLGradient': { sky: [...LIGHT.iblSky, 1], equator: [...LIGHT.iblEquator, 1], ground: [...LIGHT.iblGround, 1], intensity: LIGHT.iblIntensity },
   },
   environment: {
     toneMapping: 'aces',
-    exposure: 1.05,
+    exposure: LIGHT.exposure,
     shadows: true,
     shadowMapType: 'pcf',
     fog: { type: 'exponential', color: FOG_COLOR, density: 0.0095 },
   },
-  player: { transform: { position: [L.SPAWN[0], r(groundY(...L.SPAWN)), L.SPAWN[1]], rotationDeg: [0, 0, 0] } },
+  player: { transform: { position: [L.SPAWN[0], r(groundY(...L.SPAWN)), L.SPAWN[1]], rotationDeg: [0, L.SPAWN_YAW_DEG, 0] } },
   resources: { prefabs },
   authoring: { views },
   nodes,

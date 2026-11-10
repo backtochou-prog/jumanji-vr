@@ -21,6 +21,7 @@ import {
   PATH_SAMPLES,
   TERRAIN,
   areaWeights,
+  hillWeight,
   distanceToPath,
   fbm,
   groundBlend,
@@ -29,7 +30,7 @@ import {
   terrainHeight,
 } from '../world/layout.js';
 import { GEO, MTN_MUD, VALLEY, fallWetness, mountainTiles, mountainWeight, routeNear } from '../world/mountain.js';
-import { PAL } from '../world/palette.js';
+import { MEADOW, PAL, SUN_DIR } from '../world/palette.js';
 import { BAKED } from '../world/baked.js';
 import { groundMaterial, mountainGroundMaterial } from './lib/materials.js';
 
@@ -58,6 +59,16 @@ const TINT = {
   entrance: new Color(0.8, 0.92, 0.96),
   trail: new Color(0.95, 1.0, 0.92),
   clearing: new Color(1.1, 1.05, 0.9),
+};
+/** The knoll meadow's ground palette (world/palette.ts MEADOW): fresh green, curing gold, straw flecks, bleached stone and the pale flower-drift tints. */
+const M = {
+  base: new Color(MEADOW.base),
+  lush: new Color(MEADOW.lush),
+  gold: new Color(MEADOW.gold),
+  straw: new Color(MEADOW.straw),
+  bleach: new Color(MEADOW.bleach),
+  bloomWhite: new Color(MEADOW.bloomWhite),
+  bloomBlue: new Color(MEADOW.bloomBlue),
 };
 
 /** Occluder grid for cheap baked AO (cells of 8 m). */
@@ -101,6 +112,76 @@ function bakedAO(x: number, z: number): number {
   return Math.max(0.42, ao);
 }
 
+// ---------------------------------------------------------------------------
+// Crown shadows (baked): the forest's big crowns throw long soft shadows along the sun's azimuth onto the floor. There is no real shadow map for trees, so
+// this is vertex colour only. Dappled (holes where the sun gets through), never on the sunlit knoll, never on the mountain.
+// ---------------------------------------------------------------------------
+
+interface CrownShadow {
+  x: number;
+  z: number;
+  /** unit direction the shadow runs (horizontal sun direction) */
+  ux: number;
+  uz: number;
+  /** semi-axes along / across that direction (m) */
+  a: number;
+  b: number;
+}
+let crownGridCache: { cell: number; map: Map<number, CrownShadow[]> } | null = null;
+function crownGrid(): { cell: number; map: Map<number, CrownShadow[]> } {
+  if (crownGridCache) return crownGridCache;
+  const cell = 12;
+  const map = new Map<number, CrownShadow[]>();
+  const hl = Math.hypot(SUN_DIR[0], SUN_DIR[2]) || 1;
+  const ux = SUN_DIR[0] / hl;
+  const uz = SUN_DIR[2] / hl;
+  const sinEl = Math.max(0.3, -SUN_DIR[1]);
+  const perMetre = hl / sinEl; // metres of shadow offset per metre of height = cot(elevation)
+  for (const [tx, , tz, r] of BAKED.trees) {
+    // crown height and radius from the trunk collider radius (giant 4.3, tall / broad ~2, slender 1 at scale 1)
+    const k = r > 3 ? r / 4.3 : r > 1.5 ? r / 2.0 : r / 1.0;
+    const H = r > 3 ? 66 * k : r > 1.5 ? 34 * k : 29 * k;
+    const R = r > 3 ? 9.8 * k : r > 1.5 ? 7 * k : 4.2 * k;
+    const cy = 0.74 * H;
+    const s: CrownShadow = { x: tx + ux * cy * perMetre, z: tz + uz * cy * perMetre, ux, uz, a: R * (1 + 0.6 * perMetre), b: R };
+    const ext = Math.max(s.a, s.b);
+    for (let cx = Math.floor((s.x - ext) / cell); cx <= Math.floor((s.x + ext) / cell); cx++) {
+      for (let cz = Math.floor((s.z - ext) / cell); cz <= Math.floor((s.z + ext) / cell); cz++) {
+        const key = cx * 4096 + cz;
+        (map.get(key) ?? map.set(key, []).get(key)!).push(s);
+      }
+    }
+  }
+  crownGridCache = { cell, map };
+  return crownGridCache;
+}
+
+/** Crown cover 0..1 at a point (1 under the middle of a shadow blob). */
+function crownCover(x: number, z: number): number {
+  const g = crownGrid();
+  const list = g.map.get(Math.floor(x / g.cell) * 4096 + Math.floor(z / g.cell));
+  if (!list) return 0;
+  let cover = 0;
+  for (const c of list) {
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const u = (dx * c.ux + dz * c.uz) / c.a;
+    const v = (-dx * c.uz + dz * c.ux) / c.b;
+    const q = u * u + v * v;
+    if (q < 1) cover = Math.max(cover, 1 - q);
+  }
+  return cover;
+}
+
+/** Brightness multiplier (0.6..1) of the baked crown shadows: dappled, fading out over the sunlit knoll (`hw` = hillWeight). */
+function crownShade(x: number, z: number, hw: number): number {
+  if (hw >= 0.95) return 1;
+  const cover = crownCover(x, z);
+  if (cover <= 0) return 1;
+  const dapple = 0.35 + 0.65 * smoothstep(0.36, 0.62, fbm(x * 0.42, z * 0.42, 62, 2));
+  return 1 - 0.4 * smoothstep(0, 0.45, cover) * dapple * (1 - hw);
+}
+
 const tmp = new Color();
 const mt = new Color();
 /**
@@ -129,10 +210,48 @@ function mountainTint(x: number, z: number, y: number, slope: number, out: Color
   out.lerp(C.mossDeep, wet * (1 - rockness) * 0.5);
 }
 
-/** Ground colour at a point. `slope` is rise/run; `y` (height) drives rock strata on the mountain. */
-export function groundColor(x: number, z: number, slope: number, out: Color = tmp, y = 0): Color {
+const mdw = new Color();
+const mdwFlower = new Color();
+
+/**
+ * The knoll's meadow ground, blended over the generic splat by `hw`: fresh green patches (~20 m) and curing gold (~9 m) from the shared `meadowFields`
+ * (the tufts and flowers read the same fields), dark tussock shade and pale straw flecks (~2 m), a hint of pale flower-drift colour (~8 %, the real
+ * flowers are geometry), bleached stone on the steeper bits; slopes that face the sun run a touch warmer, slopes that face away a touch cooler (`lit`).
+ */
+function meadowGround(x: number, z: number, b: ReturnType<typeof groundBlend>, n: number, lit: number, out: Color): void {
+  const hw = b.meadow;
+  mdw.copy(C.grass).lerp(M.lush, 0.35 + 0.65 * b.lush);
+  mdw.lerp(M.gold, b.straw * (0.55 + 0.4 * n));
+  const fleck = fbm(x * 0.55, z * 0.55, 63, 2);
+  mdw.lerp(M.straw, smoothstep(0.6, 0.8, fleck) * 0.4 * (0.35 + b.straw));
+  mdw.lerp(M.base, smoothstep(0.58, 0.8, 1 - fleck) * 0.32 * (1 - 0.5 * b.straw));
+  if (b.drift > 0) {
+    mdwFlower.copy(M.bloomWhite).lerp(M.bloomBlue, smoothstep(0.4, 0.6, fbm(x * 0.5 + 3, z * 0.5, 65, 2)));
+    mdw.lerp(mdwFlower, b.drift * 0.08);
+  }
+  mdw.lerp(M.bleach, b.stone * 0.7);
+  out.lerp(mdw, 0.88 * hw);
+  const macro = 0.9 + 0.2 * fbm(x * 0.02, z * 0.02, 64, 2);
+  const warm = Math.max(-0.35, Math.min(0.35, lit)) * hw;
+  out.r *= (1 + 0.25 * warm) * (1 + (macro - 1) * hw);
+  out.g *= 1 + (macro - 1) * hw;
+  out.b *= (1 - 0.3 * warm) * (1 + (macro - 1) * hw);
+}
+
+/**
+ * Ground colour at a point. `slope` is rise/run; `y` (height) drives rock strata on the mountain.
+ * `lit` = how much more (+) or less (-) the surface faces the sun than flat ground does; `curv` = curvature ambient occlusion multiplier (tiles pass them).
+ */
+export function groundColor(x: number, z: number, slope: number, out: Color = tmp, y = 0, lit = 0, curv = 1): Color {
   const b = groundBlend(x, z, slope);
   const a = areaWeights(x, z);
+  // the knoll is a sunlit meadow: the cool dark entrance tint gives way to the warm clearing tint
+  const hw = b.meadow;
+  if (hw > 0) {
+    const e = a.entrance * (1 - hw);
+    a.clearing += a.entrance - e;
+    a.entrance = e;
+  }
   const n = fbm(x * 0.9, z * 0.9, 21, 2);
   out.copy(C.soil).lerp(C.soilDark, smoothstep(0.35, 0.8, n) * 0.6);
   out.lerp(C.litter, b.litter * 0.8);
@@ -148,8 +267,10 @@ export function groundColor(x: number, z: number, slope: number, out: Color = tm
   out.r *= tmp.r / k;
   out.g *= tmp.g / k;
   out.b *= tmp.b / k;
-  if (mountainWeight(x, z) > 0.02) mountainTint(x, z, y, slope, out);
-  out.multiplyScalar(bakedAO(x, z));
+  if (hw > 0.001) meadowGround(x, z, b, n, lit, out);
+  const mw = mountainWeight(x, z);
+  if (mw > 0.02) mountainTint(x, z, y, slope, out);
+  out.multiplyScalar(bakedAO(x, z) * curv * (mw > 0.02 ? 1 : crownShade(x, z, hw)));
   return out;
 }
 
@@ -186,6 +307,15 @@ function crag(pos: Float32Array, k: number, x: number, z: number, y: number, dhx
   const amp = (n * 3.2 + (ledge - 0.5) * 1.5) * fade;
   pos[k * 3] += nx * amp;
   pos[k * 3 + 2] += nz * amp;
+}
+
+/**
+ * Curvature ambient occlusion from the height grid's 4-neighbour Laplacian (`lap`, m) over the cell area: hollows up to -28 %, crests up to +10 % on the
+ * knoll (`hw` = 1); the jungle floor, whose relief is already dark and busy, gets 45 % of that. Off on coarse / mountain tiles.
+ */
+function curvatureAO(lap: number, area: number, on: boolean, hw: number): number {
+  if (!on) return 1;
+  return 1 - Math.max(-0.1, Math.min(0.28, (lap / area) * 7)) * (0.45 + 0.55 * hw);
 }
 
 function buildTile(x0: number, z0: number, x1: number, z1: number, name: string, cellOverride?: number, material: typeof groundMaterial = groundMaterial): Mesh {
@@ -230,7 +360,10 @@ function buildTile(x0: number, z0: number, x1: number, z1: number, name: string,
       const il = 1 / Math.hypot(dhx, 1, dhz);
       put(k, x, hAt(i, j), z, -dhx * il, il, -dhz * il);
       const slope = Math.hypot(dhx, dhz);
-      groundColor(x, z, slope, c, hAt(i, j));
+      // how much this facet faces the sun relative to flat ground, and curvature AO from the height grid (hollows darker, crests a touch lighter)
+      const lit = il * (dhx * SUN_DIR[0] - SUN_DIR[1] + dhz * SUN_DIR[2]) + SUN_DIR[1];
+      const curv = curvatureAO(hAt(i - 1, j) + hAt(i + 1, j) + hAt(i, j - 1) + hAt(i, j + 1) - 4 * hAt(i, j), sx * sz, material === groundMaterial && cell <= 2.5, hillWeight(x, z));
+      groundColor(x, z, slope, c, hAt(i, j), lit, curv);
       if (slope > 1.1) crag(pos, k, x, z, hAt(i, j), dhx, dhz, slope);
       col[k * 3] = c.r;
       col[k * 3 + 1] = c.g;
@@ -334,6 +467,8 @@ function createTrailGeometry(samples: RibbonSample[], mountain = false): BufferG
         c.lerp(mud, (1 - smoothstep(m.r * 0.4, m.r * 1.2, dm)) * 0.8);
       }
       c.lerp(mud, mudK * (0.55 + 0.4 * blotch));
+      // the trail lies in the same crown shadows as the floor beside it: shade the dirt once, BEFORE blending in g2 (groundColor already applies the shade to g2)
+      if (!mountain) c.multiplyScalar(crownShade(x, z, hillWeight(x, z)));
       groundColor(x, z, 0.1, g2, y);
       c.lerp(g2, smoothstep(0.55, 1.0, edge));
       colors.push(c.r, c.g, c.b);
@@ -443,7 +578,8 @@ export function createTerrain(): Group {
   const g = new Group();
   g.name = 'JungleTerrain';
   const dx = (TERRAIN.x1 - TERRAIN.x0) / TILES_X;
-  const dz = (TERRAIN.z1 - TERRAIN.z0) / TILES_Z;
+  // the jungle tile rows reach the knoll's south edge (zSouth); the mountain tiles below keep z1
+  const dz = (TERRAIN.zSouth - TERRAIN.z0) / TILES_Z;
   for (let j = 0; j < TILES_Z; j++) {
     for (let i = 0; i < TILES_X - 1; i++) {
       const x0 = TERRAIN.x0 + i * dx;

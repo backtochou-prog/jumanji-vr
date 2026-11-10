@@ -181,7 +181,7 @@ const PR = 0.35; // player radius
 const X0 = -32;
 const X1 = 32;
 const Z0 = -86;
-const Z1 = 22;
+const Z1 = 47; // the knoll (the start) reaches z = 44
 const NX = Math.ceil((X1 - X0) / CELL);
 const NZ = Math.ceil((Z1 - Z0) / CELL);
 const walk = new Uint8Array(NX * NZ);
@@ -190,8 +190,7 @@ for (let j = 0; j < NZ; j++) {
   for (let i = 0; i < NX; i++) {
     const x = X0 + (i + 0.5) * CELL;
     const z = Z0 + (j + 0.5) * CELL;
-    const e = Math.hypot((x - L.WALK_LIMIT.cx) / (L.WALK_LIMIT.rx - 1.2), (z - L.WALK_LIMIT.cz) / (L.WALK_LIMIT.rz - 1.2));
-    if (e > 1) continue;
+    if (!L.walkInside(x, z, 1.2)) continue; // the old ellipse OR the knoll's disc
     if (circleHit(x, z, PR) || inBox(x, z, PR)) continue;
     if (L.terrainSlope(x, z, 0.5) > slopeLimit) continue;
     walk[j * NX + i] = 1;
@@ -294,6 +293,87 @@ console.log('5. slope: comfortable trail');
 // ---------------------------------------------------------------------------
 // 6. areas and landmarks
 // ---------------------------------------------------------------------------
+console.log('5b. knoll: the start is a comfortable hilltop with a clear view of the waterfall');
+{
+  // --- ground: slopes, height, regime guard
+  const sy = L.terrainHeight(L.SPAWN[0], L.SPAWN[1]);
+  if (sy > 9.0) err(`spawn ground is ${sy.toFixed(1)} m: above 9 m the 3x-gravity zone (10 m) is too near`);
+  else ok(`spawn ground ${sy.toFixed(2)} m above the sea-level floor, eye ${(sy + 1.65).toFixed(2)} m`);
+  let worst = 0, at = '', maxX = -99, maxYnear = -99, n = 0, near = 0;
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const k = j * NX + i;
+    if (seen[k] < 0) continue;
+    const x = X0 + (i + 0.5) * CELL, z = Z0 + (j + 0.5) * CELL;
+    if (z <= -18) continue;
+    n++;
+    const sl = L.terrainSlope(x, z, 0.5);
+    if (sl > worst) { worst = sl; at = `(${x.toFixed(1)}, ${z.toFixed(1)})`; }
+    if (Math.hypot(x - L.SPAWN[0], z - L.SPAWN[1]) < 4 && sl > 0.09) err(`slope ${sl.toFixed(2)} within 4 m of the spawn at (${x.toFixed(1)}, ${z.toFixed(1)}): the standing place must be nearly level`);
+    const gy = L.terrainHeight(x, z);
+    // AtmosphereSystem: open = smoothstep(3, 12, y) but only for a player at x > 18: any walkable ground above 3 m must be at x <= 18
+    if (gy > 3.0) maxX = Math.max(maxX, x);
+    maxYnear = Math.max(maxYnear, gy);
+  }
+  if (worst > 0.26) err(`knoll/ramp slope ${worst.toFixed(2)} at ${at} exceeds 0.26 (14.6 deg)`);
+  else ok(`${n} walkable cells from the start down to the old trail, steepest ${worst.toFixed(2)} (${(Math.atan(worst) * 57.3).toFixed(1)} deg) at ${at}`);
+  // AtmosphereSystem only derives `open` (far plane, mountain cells, thin fog) for a player at x > MZ.x0 - 4: the knoll must stay on the cheap side of it
+  if (maxX >= M.MZ.x0 - 4) err(`a walkable cell at x = ${maxX.toFixed(1)} reaches the mountain regime gate (x > ${M.MZ.x0 - 4}) while above 3 m: the knoll would switch the whole rendering regime`);
+  else ok(`walkable ground above 3 m ends at x = ${maxX.toFixed(1)} (regime gate at ${M.MZ.x0 - 4}); highest walkable ground ${maxYnear.toFixed(1)} m`);
+  // the hill must not touch the mountain route
+  const leak = Math.max(...L.MTN.samples.filter((q) => q.x >= 24).map((q) => Math.abs(L.hillHeight(q.x, q.z))));
+  if (leak > 0.01) err(`the hill changes the mountain route by ${leak.toFixed(3)} m`);
+  else ok('the hill leaves every mountain route sample untouched (< 1 cm)');
+  // nothing solid within 3 m of the standing place
+  const sp = L.SPAWN;
+  if (circleHit(sp[0], sp[1], 3)) err(`a collider within 3 m of the spawn: ${JSON.stringify(circleHit(sp[0], sp[1], 3))}`);
+
+  // --- the view: rays from the eye to the waterfall through trunks, crowns, the temple and the entrance limb
+  const eye = [sp[0], sy + 1.65, sp[1]];
+  const H = { giant: 66, tall: 40, broad: 28, slender: 29 }; // tree heights (m, scale 1)
+  const TR = { giant: 2.2, tall: 1.0, broad: 1.1, slender: 0.55 }; // trunk radius above the buttress
+  const CR = { giant: 9.8, tall: 6.2, broad: 8.2, slender: 4.2 }; // crown radius
+  const trees = [...P.treePlacements()];
+  const [ga, gb] = L.ENTRANCE_TREES;
+  const pa = [ga[0] + 0.5, L.terrainHeight(ga[0], ga[1]) + L.ENTRANCE_LIMB.liftA, ga[1]];
+  const pb = [gb[0] - 0.6, L.terrainHeight(gb[0], gb[1]) + L.ENTRANCE_LIMB.liftB, gb[1]];
+  const limb = [];
+  for (let i = 0; i <= 12; i++) { const t = i / 12; limb.push([pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t + 1.9 * Math.sin(Math.PI * t), pa[2] + (pb[2] - pa[2]) * t]); }
+  const blocker = (x, y, z) => {
+    if (L.terrainHeight(x, z) + 0.3 > y) return 'terrain';
+    for (const t of trees) {
+      const dx = x - t.x, dz = z - t.z, h = H[t.kind] * t.scale;
+      if (dx * dx + dz * dz < (TR[t.kind] * t.scale + 0.3) ** 2 && y < t.y + h * 0.95) return `trunk ${t.kind} (${t.x.toFixed(0)},${t.z.toFixed(0)})`;
+      const cy = t.y + h * 0.74, R = CR[t.kind] * t.scale, ry = h * 0.2;
+      if ((dx * dx + dz * dz) / (R * R) + ((y - cy) * (y - cy)) / (ry * ry) < 1) return `crown ${t.kind} (${t.x.toFixed(0)},${t.z.toFixed(0)})`;
+    }
+    if (Math.abs(x - L.TEMPLE.x) < L.TEMPLE.width / 2 && Math.abs(z - L.TEMPLE.z) < L.TEMPLE.depth / 2 && y < L.TEMPLE_BASE + 14) return 'temple';
+    for (const q of limb) if (Math.hypot(x - q[0], y - q[1], z - q[2]) < 1.3) return 'entrance limb';
+    return null;
+  };
+  const fall = [4.3, -91];
+  const ray = (ty) => {
+    const len = Math.hypot(fall[0] - eye[0], ty - eye[1], fall[1] - eye[2]);
+    for (let d = 3; d < len - 2; d += 0.5) {
+      const u = d / len;
+      const b = blocker(eye[0] + (fall[0] - eye[0]) * u, eye[1] + (ty - eye[1]) * u, eye[2] + (fall[1] - eye[2]) * u);
+      if (b) return { b, at: d };
+    }
+    return null;
+  };
+  const blockedHigh = [];
+  for (let y = 18; y <= 48; y += 3) { const r = ray(y); if (r) blockedHigh.push(`y=${y}: ${r.b} at ${r.at.toFixed(0)} m`); }
+  if (blockedHigh.length) err(`the waterfall (y 18-48 m at the fall) is blocked from the knoll: ${blockedHigh.join('; ')}`);
+  else ok('all 11 sight lines from the knoll eye to the waterfall (y 18-48 m) are clear of trunks, crowns, the temple and the entrance limb');
+  const low = ray(12);
+  if (low && low.b !== 'temple') warn(`the ray to the lower fall (y = 12) is first blocked by ${low.b} at ${low.at.toFixed(0)} m, not by the temple`);
+  else ok(`the lower fall is hidden only by ${low ? 'the temple (a deliberate foreground layer)' : 'nothing'}`);
+  // the gate's window, as seen from the knoll
+  // the trunks above the buttresses are ~2.2 m in radius (the buttress flare is a ground-level thing)
+  const gl = Math.atan2(ga[0] + 2.2 - sp[0], -(ga[1] - sp[1])) * 57.3, gr = Math.atan2(gb[0] - 2.2 - sp[0], -(gb[1] - sp[1])) * 57.3;
+  if (gr - gl < 24) err(`the gate window seen from the knoll is only ${(gr - gl).toFixed(0)} degrees wide (want >= 24)`);
+  else ok(`the gate window seen from the knoll is ${(gr - gl).toFixed(0)} degrees wide (bearings ${gl.toFixed(0)} .. ${gr.toFixed(0)})`);
+}
+
 console.log('6. areas: identity and landmarks');
 {
   const by = { entrance: { trees: 0, plants: 0 }, trail: { trees: 0, plants: 0 }, clearing: { trees: 0, plants: 0 } };

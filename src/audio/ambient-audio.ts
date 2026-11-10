@@ -20,6 +20,9 @@ import { CALL_MAKERS, SR, bubbles, brownNoise, cicadas, crickets, whiteNoise, wi
 
 const PREF_KEY = 'jumanji-vr.sound.v1';
 
+/** Rolloff factor of the backdrop waterfall's panner: at 109-122 m its level is about 1.6x that of a stream-style rolloff (audibility 0.22 -> ~0.4 at ref 28..46). */
+const BACKDROP_ROLLOFF = 0.75;
+
 export const audioInfo = {
   supported: typeof globalThis.AudioContext !== 'undefined' || typeof (globalThis as unknown as { webkitAudioContext?: unknown }).webkitAudioContext !== 'undefined',
   enabled: true,
@@ -64,7 +67,7 @@ interface CallVoice {
 
 const jungleEmitters = (): Emitter[] => {
   const e: Emitter[] = [];
-  e.push({ name: 'backdrop waterfall', x: CLIFF.x, y: terrainHeight(CLIFF.x, CLIFF.z) + 6, z: CLIFF.z + 4, ref: 28, gain: 0.85, kind: 'fall', active: false, nodes: null });
+  e.push({ name: 'backdrop waterfall', x: CLIFF.x, y: terrainHeight(CLIFF.x, CLIFF.z) + 6, z: CLIFF.z + 4, ref: 46, gain: 0.85, kind: 'fall', active: false, nodes: null });
   e.push({ name: 'pool cascade', x: POOL.x, y: POOL.waterY + 0.6, z: POOL.z - 1, ref: 5, gain: 0.55, kind: 'trickle', active: false, nodes: null });
   const picks = [8, Math.floor(STREAM_SAMPLES.length * 0.4), Math.floor(STREAM_SAMPLES.length * 0.75)];
   picks.forEach((i, k) => {
@@ -95,6 +98,12 @@ export class AmbientAudio implements CallSink {
   private callBus: GainNode | null = null;
   private buffers: Record<string, AudioBuffer[]> = {};
   private emitters: Emitter[] = [...jungleEmitters(), ...mountainEmitters()];
+  /** The jungle backdrop waterfall (found by name, so the emitter table can change): the opening reveal rides its level, and it rolls off gently with distance. */
+  private backdrop: Emitter | null = this.emitters.find((e) => e.name === 'backdrop waterfall') ?? null;
+  /** Level multiplier of the backdrop waterfall (IntroSystem: quiet in the mist, swelling as it lifts, 1 otherwise) and the time constant of its change. */
+  private fallLevel = 1;
+  private fallTau = 2.5;
+  private fallApplied = 1;
   private insectVoices: { src: AudioBufferSourceNode; panner: PannerNode; gain: GainNode; ang: number; rad: number; kind: string }[] = [];
   private voices: CallVoice[] = [];
   private rng = makeRandom(8128);
@@ -332,7 +341,16 @@ export class AmbientAudio implements CallSink {
 
   private audibility(e: Emitter, px: number, py: number, pz: number): number {
     const d = Math.hypot(e.x - px, e.y - py, e.z - pz);
-    return (e.gain * e.ref) / (e.ref + Math.max(0, d - e.ref));
+    return (e.gain * e.ref) / (e.ref + this.rolloffOf(e) * Math.max(0, d - e.ref));
+  }
+
+  /** Distance rolloff of an emitter's panner (Web Audio 'inverse' model). The far backdrop fall rolls off gently: it is heard long before it is reached. */
+  private rolloffOf(e: Emitter): number {
+    return e === this.backdrop ? BACKDROP_ROLLOFF : 1;
+  }
+
+  private emitterLevel(e: Emitter): number {
+    return e === this.backdrop ? e.gain * this.fallLevel : e.gain;
   }
 
   private slow(dt: number, px: number, py: number, pz: number, open: number, still: boolean, activity: number): void {
@@ -354,6 +372,11 @@ export class AmbientAudio implements CallSink {
       }
     }
     audioInfo.waterVoices = playing;
+    const bd = this.backdrop;
+    if (bd && bd.active && bd.nodes && Math.abs(this.fallLevel - this.fallApplied) > 0.004) {
+      bd.nodes.gain.gain.setTargetAtTime(bd.gain * this.fallLevel, now, this.fallTau);
+      this.fallApplied = this.fallLevel;
+    }
     // masking: water drowns the quieter beds (insects, wind, distant birds)
     const mask = 1 - 0.6 * Math.min(1, waterNear * 1.6);
     audioInfo.masked = 1 - mask;
@@ -406,7 +429,7 @@ export class AmbientAudio implements CallSink {
     const src: AudioBufferSourceNode[] = [];
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    const panner = this.makePanner(e.kind === 'fall' ? 'HRTF' : 'equalpower', e.ref, 1);
+    const panner = this.makePanner(e.kind === 'fall' ? 'HRTF' : 'equalpower', e.ref, this.rolloffOf(e));
     this.setPos(panner, e.x, e.y, e.z, now);
     gain.connect(panner);
     panner.connect(this.waterBus!);
@@ -440,7 +463,8 @@ export class AmbientAudio implements CallSink {
       layer('white', 'bandpass', 1300, 0.55, 0.32);
       layer('bubbles', 'highpass', 900, 0.5, 0.35, 0.8);
     }
-    gain.gain.setTargetAtTime(e.gain, now, 1.2);
+    gain.gain.setTargetAtTime(this.emitterLevel(e), now, 1.2);
+    if (e === this.backdrop) this.fallApplied = this.fallLevel;
     e.nodes = { src, gain, panner };
     e.active = true;
   }
@@ -527,6 +551,27 @@ export class AmbientAudio implements CallSink {
       s.start(now, this.rng() * 4);
       this.insectVoices.push({ src: s, panner: p, gain: g, ang: (i / defs.length) * Math.PI * 2 + this.rng(), rad, kind });
     });
+  }
+
+  // ------------------------------------------------------------------ opening reveal (IntroSystem)
+  /**
+   * Level of the backdrop waterfall relative to normal (1 = normal): the reveal starts it quiet inside the mist, brings it up with a long time constant and lets it
+   * swell as the mist lifts. Applied at the next 10 Hz tick (and when the emitter starts); a no-op while sound is off or not started.
+   */
+  setFallLevel(level: number, tau = 2.5): void {
+    this.fallLevel = Math.max(0, Math.min(2, level));
+    this.fallTau = Math.max(0.2, tau);
+  }
+
+  /**
+   * A one-shot macaw call at a world position - the "listen, over there" cue toward the waterfall. Returns true when it really sounded (sound on, context
+   * running, buffers ready, a voice free), so the caller can retry a moment later when the audio engine was not ready yet.
+   */
+  introCue(x: number, y: number, z: number): boolean {
+    if (!audioInfo.enabled || !this.ctx || this.ctx.state !== 'running') return false;
+    const before = audioInfo.callsPlayed;
+    this.call('macaw', x, y, z, 0.8);
+    return audioInfo.callsPlayed > before;
   }
 
   // ------------------------------------------------------------------ CallSink

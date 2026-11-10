@@ -28,6 +28,7 @@ import {
   ENTRANCE_TREES,
   FALLEN_GIANT,
   FORD,
+  HILL,
   MUD_PATCHES,
   PATH_SAMPLES,
   PILLARS,
@@ -39,19 +40,23 @@ import {
   SPIRE,
   STREAM_SAMPLES,
   TEMPLE,
+  VISTA,
   WALK_LIMIT,
   areaWeights,
   distanceToPath,
   distanceToStream,
   fbm,
+  hillWeight,
   inMountainZone,
+  inVistaFan,
   makeRandom,
   smoothstep,
   terrainHeight,
   vegetationDensity,
   wetness,
 } from './layout.ts';
-import { SUN_DIR } from './palette.ts';
+import { SUN_DIR, SUN_TO } from './palette.ts';
+import { KNOLL_FORWARD, KNOLL_RIGHT, MEADOW_WIND, MONOLITH_SCALE, meadowFields, meadowTuftDensity } from './layout.ts';
 
 export interface Placement {
   x: number;
@@ -87,6 +92,11 @@ function ellipse(x: number, z: number): number {
   const dx = (x - WALK_LIMIT.cx) / WALK_LIMIT.rx;
   const dz = (z - WALK_LIMIT.cz) / WALK_LIMIT.rz;
   return Math.sqrt(dx * dx + dz * dz);
+}
+
+/** Normalised distance in the walkable REGION (old ellipse or the knoll's disc): <= 1 inside. Plants use it; trees and rocks keep `ellipse` so the rest of the forest does not re-roll. */
+function walkMetric(x: number, z: number): number {
+  return Math.min(ellipse(x, z), Math.hypot(x - HILL.walk.cx, z - HILL.walk.cz) / HILL.walk.r);
 }
 
 function segDist(x: number, z: number, a: readonly [number, number], b: readonly [number, number]): number {
@@ -141,19 +151,24 @@ export function treePlacements(): TreePlacement[] {
     const near = pd < 14 || Math.hypot(p.x - SPAWN[0], p.z - SPAWN[1]) < 20 || Math.hypot(p.x - CLEARING.x, p.z - CLEARING.z) < CLEARING.r + 10;
     out.push({ ...p, tiltX: 0, tiltZ: 0, kind, colliderRadius: TREE_COLLIDER[kind] * p.scale, lod: forceLod ?? (near ? 'hi' : 'lo') });
   };
-  const fixed = (x: number, z: number, kind: TreeKind, variant: number, yaw: number, scale = 1) =>
-    push({ x, y: terrainHeight(x, z), z, yaw, scale, variant, tiltX: 0, tiltZ: 0 }, kind, 'hi');
+  // Fixed trees are the composition's FRAME (gate, second ring, south grove): exempt from the vista fan that clears the random ones.
+  const fixedTrees = new Set<TreePlacement>();
+  const fixed = (x: number, z: number, kind: TreeKind, variant: number, yaw: number, scale = 1, lod: 'hi' | 'lo' = 'hi') => {
+    push({ x, y: terrainHeight(x, z), z, yaw, scale, variant, tiltX: 0, tiltZ: 0 }, kind, lod);
+    fixedTrees.add(out[out.length - 1]);
+  };
 
   // The gate: two colossal trees frame the trail; two more step back to deepen it.
   fixed(ENTRANCE_TREES[0][0], ENTRANCE_TREES[0][1], 'giant', 0, 0.6);
   fixed(ENTRANCE_TREES[1][0], ENTRANCE_TREES[1][1], 'giant', 1, 2.4);
-  fixed(-12.0, -8.5, 'giant', 2, 1.9, 0.95);
-  fixed(13.0, -10.5, 'giant', 0, 4.1, 0.92);
+  // (second ring moved outward with the widened gate: the portal seen from the knoll is ~26 degrees wide)
+  fixed(-19.5, -9.5, 'giant', 2, 1.9, 0.95);
+  fixed(18.5, -11.5, 'giant', 0, 4.1, 0.92);
   // Landmark: the giant that carries the root arch beside the trail.
   // (the root-arch asset grows from a trunk 4.8 m along its local +X)
   fixed(ROOT_ARCH.x + ROOT_ARCH.trunk * Math.cos(ROOT_ARCH.yaw), ROOT_ARCH.z - ROOT_ARCH.trunk * Math.sin(ROOT_ARCH.yaw), 'giant', 2, ROOT_ARCH.yaw + 1.2, 0.8);
   // Clearing rim: a few mature trees frame the open meadow (never in the view corridors).
-  fixed(-14.5, -56, 'giant', 2, 0.3, 0.9);
+  fixed(-31, -60, 'giant', 2, 0.3, 0.9); // (was (-14.5,-56): it overlapped the spire's base and would stand in the middle of the vista)
   fixed(12.5, -59.5, 'giant', 1, 2.1, 0.88);
 
   const kindOrder: TreeKind[] = ['tall', 'broad', 'slender', 'tall', 'broad', 'giant'];
@@ -189,7 +204,24 @@ export function treePlacements(): TreePlacement[] {
     if (out.some((o) => Math.hypot(o.x - x, o.z - z) < (o.colliderRadius + r) * 1.15 + 1.0)) continue;
     push({ x, y: terrainHeight(x, z), z, yaw: rng() * TAU, scale, variant: Math.floor(rng() * TREE_VARIANTS[kind]), tiltX: 0, tiltZ: 0 }, kind);
   }
-  treeCache = out.filter((t) => !inMountainZone(t.x, t.z, t.colliderRadius + 1.6));
+  // The south grove: a ring of giants and canopy trees behind and beside the knoll (appended AFTER the random loop so its RNG sequence is unchanged).
+  // They close the view when you turn round, hide the walk boundary and the world's southern edge, and keep the knoll feeling enclosed and sheltered.
+  for (const [x, z, kind, variant, scale] of [
+    [-17, 45, 'giant', 1, 1.0],
+    [12, 47, 'giant', 0, 0.95],
+    [-3, 57, 'giant', 2, 1.05],
+    [23, 27, 'giant', 1, 0.9],
+    [-25, 25, 'giant', 0, 0.92],
+    [-22, 36, 'tall', 0, 1.0],
+    [18, 38, 'tall', 1, 1.0],
+    [-9, 51, 'tall', 1, 1.0],
+    [6, 53, 'tall', 0, 1.0],
+  ] as [number, number, TreeKind, number, number][]) fixed(x, z, kind, variant, (x * 12.9898 + z * 78.233) % TAU, scale, Math.hypot(x - SPAWN[0], z - SPAWN[1]) < 22 ? 'hi' : 'lo');
+  // The vista: no RANDOM tree inside the fan of sight from the knoll to the waterfall (all kinds), nor at the fall's foot, nor in the knoll's glade.
+  const fanPad: Record<TreeKind, number> = { giant: 7, tall: 6, broad: 6, slender: 4 };
+  treeCache = out.filter((t) => !inMountainZone(t.x, t.z, t.colliderRadius + 1.6)).filter((t) => fixedTrees.has(t) || !inVistaFan(t.x, t.z, fanPad[t.kind] * t.scale))
+    // a random tree never overlaps a fixed one (the grove and the moved frame were added after the random loop had chosen its spots)
+    .filter((t) => fixedTrees.has(t) || ![...fixedTrees].some((f) => Math.hypot(f.x - t.x, f.z - t.z) < (f.colliderRadius + t.colliderRadius) * 1.15 + 1.0));
   return treeCache;
 }
 
@@ -203,6 +235,10 @@ export interface RockPlacement extends Placement {
   collider: boolean;
   /** Placed in/at water (not ground-tilted, sunk deeper). */
   wet: boolean;
+  /** The knoll's own prototype (`rock-<kind>-<n>`), named explicitly so the jungle's random variants keep their ids (tools/generate-scene.mjs). */
+  fixedVariant?: number;
+  /** No contact-AO disc in the terrain colours (flush stones, pebbles). */
+  noAO?: boolean;
 }
 
 let rockCache: RockPlacement[] | null = null;
@@ -307,6 +343,24 @@ export function rockPlacements(): RockPlacement[] {
     if (out.some((o) => Math.hypot(o.x - x, o.z - z) < 3.2)) continue;
     add(x, z, rim ? (rng() > 0.5 ? 'cobble' : 'boulder') : rng() > 0.4 ? 'boulder' : 'slab', rim ? 0.7 + rng() * 0.8 : 1.0 + rng() * 1.5, !rim);
   }
+  // The knoll's lookout: a ring of standing stones and boulders on the southern arc around the start (bearings 100-260 degrees from north; the north,
+  // the view, stays open). Added last so the random sequence of everything above is untouched; `add` keeps the 1.8 m trail lane clear.
+  {
+    const arc = makeRandom(8817);
+    for (let i = 0; i < 9; i++) {
+      const az = ((100 + (160 * i) / 8 + (arc() - 0.5) * 8) * Math.PI) / 180;
+      const rad = 5.5 + (arc() - 0.5) * 1.4;
+      const x = SPAWN[0] + Math.sin(az) * rad;
+      const z = SPAWN[1] - Math.cos(az) * rad;
+      const n0 = out.length;
+      if (i % 3 === 1) add(x, z, 'boulder', 0.95 + arc() * 0.5, true);
+      else add(x, z, 'standing', 0.9 + arc() * 0.5, true);
+      // in full sun on dry grass: the sunlit sandstone variants (boulder 2-3, standing 4), not the jungle's mossy ones
+      if (out.length > n0) out[n0].fixedVariant = out[n0].kind === 'boulder' ? 2 + (i % 2) : 4;
+    }
+  }
+  knollDressing(out, free);
+  out.push(lecternStone()); // the welcome board's stone, beside the start
   rockCache = out.filter((r) => !inMountainZone(r.x, r.z, r.scale));
   return rockCache;
 }
@@ -404,10 +458,10 @@ function nearestPathPoint(x: number, z: number): readonly [number, number] {
 // Plants (clustered, band-driven)
 // ---------------------------------------------------------------------------
 
-export type PlantKind = 'fern' | 'treefern' | 'broadleaf' | 'shrub' | 'palm' | 'cover' | 'flowers' | 'moss' | 'litter' | 'reed' | 'pads';
+export type PlantKind = 'fern' | 'treefern' | 'broadleaf' | 'shrub' | 'palm' | 'cover' | 'flowers' | 'moss' | 'litter' | 'reed' | 'pads' | 'meadow';
 
 /** Variants per kind (assets: `fern-cluster-<0-2>`, `patch-<0-3>`, `<kind>-<variant>`; see tools/generate-scene.mjs). */
-export const PLANT_VARIANTS: Record<PlantKind, number> = { fern: 3, treefern: 1, broadleaf: 3, shrub: 2, palm: 4, cover: 2, flowers: 1, moss: 1, litter: 1, reed: 2, pads: 1 };
+export const PLANT_VARIANTS: Record<PlantKind, number> = { fern: 3, treefern: 1, broadleaf: 3, shrub: 2, palm: 4, cover: 2, flowers: 1, moss: 1, litter: 1, reed: 2, pads: 1, meadow: 8 };
 
 let solidCache: Solid[] | null = null;
 /** Everything plants must keep out of: trunks, big rocks, logs, pillars, altar, temple, arch. */
@@ -448,6 +502,7 @@ const BANDS: Record<PlantKind, Band> = {
   palm: { min: 3.0, max: 18 },
   reed: { min: 0, max: 99 },
   pads: { min: 0, max: 99 },
+  meadow: { min: 0, max: 99 },
 };
 
 /** Plant weights by area (entrance / trail / clearing) per kind. */
@@ -463,6 +518,7 @@ const AREA_MIX: Record<PlantKind, [number, number, number]> = {
   litter: [1.0, 0.9, 0.15],
   reed: [1, 1, 1],
   pads: [1, 1, 1],
+  meadow: [1, 1, 1],
 };
 
 interface PlantRule {
@@ -475,7 +531,7 @@ interface PlantRule {
   /** Extra clearance from solids (m). */
   pad: number;
 }
-const RULES: Record<Exclude<PlantKind, 'reed' | 'pads'>, PlantRule> = {
+const RULES: Record<Exclude<PlantKind, 'reed' | 'pads' | 'meadow'>, PlantRule> = {
   fern: { target: 80, per: [1, 3], spread: 2.6, scale: [0.9, 1.14], seed: 11, pad: 0.3 },
   treefern: { target: 14, per: [1, 2], spread: 2.0, scale: [0.9, 1.1], seed: 12, pad: 1.0 },
   // heliconia / banana / alocasia: real plants are 2-5 m; the prototypes are 1.6-2.4 m, so they are placed at 1.25-1.5x
@@ -501,6 +557,7 @@ export function plantPlacements(kind: PlantKind): Placement[] {
 function computePlants(kind: PlantKind): Placement[] {
   if (kind === 'reed') return reedPlacements();
   if (kind === 'pads') return padPlacements();
+  if (kind === 'meadow') return meadowPlacements();
   const rule = RULES[kind];
   const rng = makeRandom(rule.seed);
   const band = BANDS[kind];
@@ -510,7 +567,7 @@ function computePlants(kind: PlantKind): Placement[] {
   while (out.length < rule.target && guard++ < 90000) {
     const cx = -46 + rng() * 92;
     const cz = -92 + rng() * 128;
-    if (ellipse(cx, cz) > 1.12) continue;
+    if (walkMetric(cx, cz) > 1.12) continue;
     const a = areaWeights(cx, cz);
     const w = a.entrance * mix[0] + a.trail * mix[1] + a.clearing * mix[2];
     const wet = wetness(cx, cz);
@@ -527,6 +584,10 @@ function computePlants(kind: PlantKind): Placement[] {
       const edge = p.dist - p.halfWidth;
       if (edge < band.min || edge > band.max) continue;
       if (Math.hypot(x - SPAWN[0], z - SPAWN[1]) < (sparse ? 1.2 : 3.6)) continue;
+      // moss mats and leaf litter are forest-floor details: on the sunlit knoll meadow they read as plaid patches and stray brown leaves
+      if ((kind === 'moss' || kind === 'litter') && hillWeight(x, z) > 0.3) continue;
+      // the vista window stays open: nothing taller than a fern in the fan of sight from the knoll to the waterfall (a tree fern or palm 5 m in front of the eye hides the view)
+      if ((kind === 'treefern' || kind === 'palm' || kind === 'broadleaf' || kind === 'shrub') && inVistaFan(x, z, 1.5)) continue;
       if (distanceToStream(x, z) < (kind === 'moss' ? 0.2 : 1.0) && kind !== 'litter') continue; // keep the water itself clear
       if (Math.hypot(x - POOL.x, z - POOL.z) < POOL.r * 1.05) continue;
       if (MUD_PATCHES.some((m) => Math.hypot(m.x - x, m.z - z) < m.r * 0.9)) continue;
@@ -590,7 +651,7 @@ function padPlacements(): Placement[] {
 export function groundOccluders(): { x: number; z: number; r: number }[] {
   const out: { x: number; z: number; r: number }[] = [];
   for (const t of treePlacements()) out.push({ x: t.x, z: t.z, r: t.colliderRadius * 0.85 });
-  for (const r of rockPlacements()) out.push({ x: r.x, z: r.z, r: r.scale * 0.8 });
+  for (const r of rockPlacements()) if (!r.noAO) out.push({ x: r.x, z: r.z, r: r.scale * 0.8 });
   for (const d of deadwoodPlacements()) if (d.kind === 'log') out.push({ x: d.x, z: d.z, r: d.length * 0.3 });
   for (const s of solids()) if (s.kind === 'temple' || s.kind === 'pillar' || s.kind === 'altar' || s.kind === 'arch') out.push({ x: s.x, z: s.z, r: s.r * 0.7 });
   return out;
@@ -622,23 +683,250 @@ export function lightShafts(): ShaftSpec[] {
       const x = px + sx * off;
       const z = pz + sz * off;
       if (distanceToStream(x, z) < 1.5 || blocked(x, z, 0.5)) continue;
+      // never on the knoll meadow: a beam rising from the player's feet toward the player would stab through the view
+      if (hillWeight(x, z) > 0.25) continue;
       let nearest = 99;
       for (const t of trees) nearest = Math.min(nearest, Math.hypot(t.x - x, t.z - z) - t.colliderRadius);
       const a = areaWeights(x, z);
       const clearing = a.clearing > 0.5;
       // Shafts rise toward the sun side: bias beams whose base is west of the trail so they cross it.
       const sunSide = off < 0 ? 1 : 0.8;
-      cands.push({ x, z, w: 2.6 + (nearest > 3 ? 1.0 : 0), len: clearing ? 20 : 15 + Math.min(6, nearest), strength: clearing ? 0.8 : 1, score: Math.min(nearest, 9) * sunSide });
+      // A lower sun lays the beam over: stretch it so it keeps (about) the same rise (reference sun: sin(elevation) = 0.755)
+      const lenK = Math.min(1.3, 0.755 / SUN_TO[1]);
+      cands.push({ x, z, w: 2.6 + (nearest > 3 ? 1.0 : 0), len: (clearing ? 20 : 15 + Math.min(6, nearest)) * lenK, strength: clearing ? 0.8 : 1, score: Math.min(nearest, 9) * sunSide });
     }
   }
   cands.sort((a, b) => b.score - a.score);
   const picked: ShaftSpec[] = [];
   for (const c of cands) {
     if (picked.length >= 9) break;
-    if (picked.some((p) => Math.hypot(p.x - c.x, p.z - c.z) < 12)) continue;
+    if (picked.some((p) => Math.hypot(p.x - c.x, p.z - c.z) < 9.5)) continue;
     picked.push({ x: c.x, z: c.z, w: c.w, len: c.len, strength: c.strength });
   }
   void SUN_DIR;
   return picked.filter((s) => !inMountainZone(s.x, s.z, 3));
 }
 
+/**
+ * VISTA SHAFTS: five long, slim beams standing 25-60 m out in the +-50 degree cone around the line from the knoll to the waterfall, so the 8.7 m
+ * eye looks over sunlit air between the far trunks. They are baked into the same merged mesh as the trail shafts (name 'Light shafts': hidden in the
+ * LOW tier) and cost 5 x 96 triangles with the coarse unit shaft. `strength` scales the width (w x strength = 2.4-4 m), never the brightness, so
+ * they are as faint as the trail shafts. The centre of the view (the fall itself, +-9 degrees) stays clear: five slots, none in front of the fall.
+ * Rejected: bases on a solid, in a stream, within 1.2 m of a trunk (a beam is soft and depth-tested: the trunks in front of it simply hide it), on the knoll meadow, or whose upper end would hang within 14 m of the
+ * spawn (the beams lean toward the viewer; they must pass well beside and above the player's head).
+ */
+export function vistaShafts(): ShaftSpec[] {
+  const trees = treePlacements();
+  const rnd = makeRandom(60417);
+  const bearing0 = (Math.atan2(VISTA.fallFoot[0] - SPAWN[0], -(VISTA.fallFoot[1] - SPAWN[1])) * 180) / Math.PI;
+  const slots = [-46, -32, -18, 17, 26]; // degrees from the line to the fall (+ = right); the east side is the world's edge (x > 18), so it gets fewer
+  const out: ShaftSpec[] = [];
+  for (const slot of slots) {
+    let best: (ShaftSpec & { score: number }) | null = null;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const bearing = ((bearing0 + slot + (rnd() - 0.5) * 12) * Math.PI) / 180;
+      const dist = 25 + rnd() * 35;
+      const x = SPAWN[0] + Math.sin(bearing) * dist;
+      const z = SPAWN[1] - Math.cos(bearing) * dist;
+      if (x > 15 || x < -48 || !walkableForShaft(x, z) || hillWeight(x, z) > 0.25) continue; // stay inside the jungle's drawn ground
+      let nearest = 99;
+      for (const t of trees) nearest = Math.min(nearest, Math.hypot(t.x - x, t.z - z) - t.colliderRadius);
+      if (nearest < 1.2) continue;
+      const w = 5 + rnd() * 3; // 5-8
+      const strength = 0.4 + rnd() * 0.1; // <= 0.5
+      let len = 28 + rnd() * 12; // 28-40
+      // keep the upper end of the beam clear of the player's head
+      while (len >= 28 && Math.hypot(x + SUN_TO[0] * len - SPAWN[0], z + SUN_TO[2] * len - SPAWN[1]) < 14) len -= 2;
+      if (len < 28) continue;
+      const score = Math.min(nearest, 8) + rnd();
+      if (!best || score > best.score) best = { x, z, w, len, strength, score };
+    }
+    if (best) out.push({ x: best.x, z: best.z, w: best.w, len: best.len, strength: best.strength });
+  }
+  return out;
+}
+
+/** A shaft base may stand on open ground only: not on a solid (trunk, ruin, rock), not in or beside a stream, not in the mountain zone. */
+function walkableForShaft(x: number, z: number): boolean {
+  return !blocked(x, z, 0.8) && distanceToStream(x, z) >= 2 && !inMountainZone(x, z, 3);
+}
+
+
+// ---------------------------------------------------------------------------
+// The welcome lectern (composition-intro)
+// ---------------------------------------------------------------------------
+import { SPAWN_YAW_DEG } from './layout.ts';
+
+/**
+ * Where the welcome board stands on the knoll: 70 degrees to the right of the heading, 2.3 m out, so it never blocks the view of the fall and is found by turning
+ * the head (not the body). `faceYaw` turns its front (local +Z) toward the start point.
+ */
+export function lecternSpot(): { x: number; z: number; faceYaw: number; stoneX: number; stoneZ: number } {
+  const yaw = (SPAWN_YAW_DEG * Math.PI) / 180;
+  // heading (forward) and right vectors for a rig yawed by `yaw` about +Y (forward = -Z at yaw 0)
+  const fx = -Math.sin(yaw);
+  const fz = -Math.cos(yaw);
+  const rx = Math.cos(yaw);
+  const rz = -Math.sin(yaw);
+  const a = (70 * Math.PI) / 180;
+  const d = 2.3;
+  const dx = fx * Math.cos(a) + rx * Math.sin(a);
+  const dz = fz * Math.cos(a) + rz * Math.sin(a);
+  const x = SPAWN[0] + dx * d;
+  const z = SPAWN[1] + dz * d;
+  return { x, z, faceYaw: Math.atan2(-dx, -dz), stoneX: x + dx * 0.4, stoneZ: z + dz * 0.4 };
+}
+
+/**
+ * The standing stone behind the welcome board (a rock placement like the others: same 'standing' mesh, so no new triangles beyond one more instance).
+ * NOT included in rockPlacements() by itself: the integrator appends it there (`out.push(lecternStone())`, after the lookout ring) so that the baked
+ * rock list and the validator all see it. It is deliberately NOT a collider: it stands 2.7 m from SPAWN, which tools/validate-scene.mjs rejects for colliders
+ * (a collider within 3 m + radius of the spawn); the player can step through it, which is harmless for a 0.9 m stone behind the board.
+ */
+export function lecternStone(): RockPlacement {
+  const s = 0.95;
+  const { stoneX, stoneZ, faceYaw } = lecternSpot();
+  return { x: stoneX, y: terrainHeight(stoneX, stoneZ) - 0.55 * s * 0.5, z: stoneZ, yaw: faceYaw, scale: s, variant: 0, tiltX: 0, tiltZ: 0, kind: 'standing', collider: false, wet: false };
+}
+
+
+// ---------------------------------------------------------------------------
+// Overlook Knoll dressing: lookout stone, parapet boulders, sandstone monoliths, pebbles, and the wind-swept meadow
+// ---------------------------------------------------------------------------
+
+/** Point `a` metres ahead of the start (along the heading) and `b` metres to the right. */
+function knollSpot(a: number, b: number): [number, number] {
+  return [SPAWN[0] + KNOLL_FORWARD[0] * a + KNOLL_RIGHT[0] * b, SPAWN[1] + KNOLL_FORWARD[1] * a + KNOLL_RIGHT[1] * b];
+}
+
+/** Where the worn lookout stone lies: centred 0.35 m ahead of the standing place, so both feet are on it. */
+export function lookoutStoneSpot(): [number, number] {
+  return knollSpot(0.35, 0);
+}
+
+/**
+ * The foreground of the view, appended to rockPlacements() (own seed 8818: nothing above re-rolls):
+ *  - the lookout stone under the start (flush, pale, no collider),
+ *  - three parapet boulders 6-9 m ahead on either side of the line of sight (low: they sit below the horizon of the 8.7 m eye, so they frame the descent
+ *    and give the foreground scale without ever touching the fall),
+ *  - two sandstone monoliths (7.0 and 5.6 m, true size, colliders) either side of the gate window at about +-30 degrees, 15-17 m out: they frame the
+ *    portal to the fall like a doorway and give the whole vista a scale reference,
+ *  - a little drift of sun-bleached pebbles beside the stone.
+ * Everything keeps the 1.8 m trail lane and the 3 m clear circle around the standing place (checked by tools/validate-scene.mjs).
+ */
+function knollDressing(out: RockPlacement[], free: (x: number, z: number, r: number) => boolean): void {
+  const rk = makeRandom(8818);
+  const put = (x: number, z: number, kind: RockKind, s: number, variant: number, collider: boolean, sinkM: number, opts: { tilt?: boolean; noAO?: boolean } = {}): RockPlacement | null => {
+    if (collider && (!free(x, z, s) || distanceToPath(x, z).dist < s * 0.95 + 1.3)) return null;
+    const p = at(x, z, rk, s, s, 1, opts.tilt ?? true);
+    p.y -= sinkM;
+    const rp: RockPlacement = { ...p, kind, collider, wet: false, fixedVariant: variant, noAO: opts.noAO };
+    out.push(rp);
+    return rp;
+  };
+  // the stone under the start
+  {
+    const [x, z] = lookoutStoneSpot();
+    const p = at(x, z, rk, 0.95, 0.95, 1, true);
+    // the dome is ~0.16 m at scale 1; sink it until 4 cm show
+    out.push({ ...p, y: p.y - 0.11, kind: 'slab', collider: false, wet: false, fixedVariant: 2, noAO: true });
+  }
+  // parapet boulders: beside the line of sight, below the eye's horizon
+  const parapets: [number, number, number, number][] = [
+    [6.6, -3.9, 1.1, 2],
+    [8.0, 4.4, 0.95, 3],
+    [10.8, -6.4, 1.25, 3],
+  ];
+  for (const [a, b, s, v] of parapets) {
+    const [x, z] = knollSpot(a + (rk() - 0.5) * 0.6, b + (rk() - 0.5) * 0.6);
+    put(x, z, 'boulder', s, v, true, 0.3 * s * 0.5);
+  }
+  // monoliths: upright (no ground tilt), buried 0.15 m on top of the 0.6 m the prototype already hides
+  const monoliths: [number, number, number][] = [
+    [15.5, -9.2, 2],
+    [17.5, 10.2, 3],
+  ];
+  for (const [a, b, v] of monoliths) {
+    const [x, z] = knollSpot(a, b);
+    put(x, z, 'standing', MONOLITH_SCALE * (0.97 + 0.06 * rk()), v, true, 0.15, { tilt: false });
+  }
+  // pebbles around the stone, on the sides away from the welcome board (which stands to the right)
+  for (let i = 0; i < 12; i++) {
+    const ang = (110 + 250 * rk()) * (Math.PI / 180); // 0 = ahead, positive = to the right: so 110..360 skips the front-right quadrant of the board
+    const rad = 0.95 + 0.9 * rk();
+    const [x, z] = knollSpot(0.35 + Math.cos(ang) * rad, Math.sin(ang) * rad);
+    const s = 0.1 + 0.12 * rk();
+    put(x, z, 'cobble', s, 2 + (i % 2), false, 0.35 * s * 0.5, { noAO: true });
+  }
+}
+
+/** Yaw (about +Y) that points a prototype's local +Z along the world direction (dx, dz). */
+const yawToward = (dx: number, dz: number): number => Math.atan2(dx, dz);
+
+/**
+ * The knoll meadow (`PlantKind` 'meadow', prototypes `meadow-tuft-<0-3>` and `meadow-flowers-<0-3>`; variant 0-3 = tufts, 4-7 = flowers):
+ *  - tufts: a jittered grid thinned by `meadowTuftDensity` (thin at the standing place, full from 9 m, gone by 24 m, fewer behind), yawed so that their
+ *    lean follows the wind, gold ones where the ground is curing straw and far ones (single-triangle blades) beyond 12 m,
+ *  - flowers: clumps on their own drifts (`meadowFields().drift`), one dominant colour per drift, the amber accent rare, yawed so the heads face the sun.
+ * Seeds 7301 / 7302 are private, so no other placement list changes. Keeps off the dirt trail, the lookout stone, the welcome board and every solid.
+ */
+function meadowPlacements(): Placement[] {
+  const out: Placement[] = [];
+  const lect = lecternSpot();
+  const [lx, lz] = lookoutStoneSpot();
+  const keepOut = (x: number, z: number): boolean => Math.hypot(x - lx, z - lz) < 1.7 || Math.hypot(x - lect.x, z - lect.z) < 1.5 || Math.hypot(x - lect.stoneX, z - lect.stoneZ) < 1.4 || blocked(x, z, 0.15);
+  const windYaw = yawToward(MEADOW_WIND[0], MEADOW_WIND[1]);
+  const sunYaw = yawToward(-SUN_DIR[0], -SUN_DIR[2]);
+
+  const rng = makeRandom(7301);
+  const step = 0.95;
+  for (let gx = SPAWN[0] - 25; gx <= SPAWN[0] + 25; gx += step) {
+    for (let gz = SPAWN[1] - 25; gz <= SPAWN[1] + 25; gz += step) {
+      const x = gx + (rng() - 0.5) * step;
+      const z = gz + (rng() - 0.5) * step;
+      const dens = meadowTuftDensity(x, z);
+      const roll = rng();
+      if (dens <= 0 || roll > dens * step * step) continue;
+      if (keepOut(x, z)) continue;
+      const f = meadowFields(x, z);
+      const d = Math.hypot(x - SPAWN[0], z - SPAWN[1]);
+      const gold = rng() < f.straw * 1.15 ? 1 : 0;
+      const p = at(x, z, rng, 0.85, 1.25, 1);
+      p.scale *= 0.92 + 0.16 * f.lush;
+      p.yaw = windYaw + (rng() - 0.5) * 0.9;
+      p.variant = gold + (d > 12 ? 2 : 0);
+      out.push(p);
+    }
+  }
+
+  const rf = makeRandom(7302);
+  const stepF = 1.35;
+  for (let gx = SPAWN[0] - 22; gx <= SPAWN[0] + 22; gx += stepF) {
+    for (let gz = SPAWN[1] - 22; gz <= SPAWN[1] + 22; gz += stepF) {
+      const x = gx + (rf() - 0.5) * stepF;
+      const z = gz + (rf() - 0.5) * stepF;
+      const dx = x - SPAWN[0];
+      const dz = z - SPAWN[1];
+      const d = Math.hypot(dx, dz);
+      const roll = rf();
+      const colour = rf();
+      const accent = rf();
+      if (d < 2.4 || d > 21) continue;
+      const hw = meadowTuftDensity(x, z) > 0 ? 1 : 0; // inside the meadow (on the grass, off the trail)
+      if (!hw) continue;
+      const f = meadowFields(x, z);
+      const front = 0.65 + 0.35 * smoothstep(-0.5, 0.4, (dx * KNOLL_FORWARD[0] + dz * KNOLL_FORWARD[1]) / d);
+      if (roll > f.drift * 0.9 * front * (1 - 0.35 * smoothstep(12, 21, d))) continue;
+      if (keepOut(x, z)) continue;
+      // one dominant colour per drift (a slow noise), the warm accent in about one clump in twelve
+      const hue = fbm(x * 0.07 + 5, z * 0.07, 48, 2);
+      let v = hue < 0.44 ? 0 : hue < 0.56 ? 1 : 2;
+      if (accent < 0.12) v = 3;
+      const p = at(x, z, rf, 0.9, 1.2, 1);
+      p.yaw = sunYaw + (rf() - 0.5) * 0.9;
+      p.variant = 4 + v;
+      out.push(p);
+    }
+  }
+  return out;
+}
