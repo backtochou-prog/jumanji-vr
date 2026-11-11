@@ -266,3 +266,76 @@ export function createDragonflyWing(): BufferGeometry {
   g.computeVertexNormals();
   return g;
 }
+
+// ---------------------------------------------------------------------------
+// The living world (LivingWorldSystem): leaves, lizards, motes, ripples
+// ---------------------------------------------------------------------------
+
+/** Pollen and dust in the light, and the embers that drift toward the Heartstone: additive specks, brightness = the vertex colour. Same program as the fireflies. */
+export const pollenMaterial = new PointsMaterial({ name: 'living-motes', map: dot, size: 0.026, sizeAttenuation: true, vertexColors: true, transparent: true, blending: AdditiveBlending, depthWrite: false });
+/** Rings on the water: additive, faded through the instance colour. */
+export const rippleMaterial = new MeshBasicMaterial({ name: 'living-ripple', vertexColors: true, transparent: true, blending: AdditiveBlending, depthWrite: false });
+
+/** A fallen leaf: stem at -Z, tip at +Z, length 1 (instanced at 6-11 cm), slightly cupped; neutral with a dark midrib, hue from the instance tint. */
+export function createLeaf(): BufferGeometry {
+  const N = 5;
+  const pos: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const z = t - 0.5;
+    const w = 0.3 * Math.sin(Math.PI * Math.pow(t, 0.8)) + 0.012;
+    const cup = 0.05 * Math.sin(Math.PI * t);
+    pos.push(-w, cup, z, 0, 0, z, w, cup, z);
+    col.push(0.95, 0.95, 0.95, 0.6, 0.6, 0.6, 0.88, 0.88, 0.88);
+    if (i < N) {
+      const a = i * 3;
+      idx.push(a, a + 1, a + 4, a, a + 4, a + 3, a + 1, a + 2, a + 5, a + 1, a + 5, a + 4);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A small lizard (anole-like): length 1 along +Z, belly on y = 0 (instanced at 14-22 cm). Neutral light/dark structure; hue from the instance tint. */
+export function createLizard(): BufferGeometry {
+  const parts: Part[] = [];
+  ellipsoid(parts, 0, 0.055, 0.12, 0.062, 0.045, 0.17, grey(0.85), 0, [7, 5]); // trunk
+  ellipsoid(parts, 0, 0.068, 0.34, 0.046, 0.036, 0.085, grey(0.95), -0.15, [6, 4]); // head
+  ellipsoid(parts, 0, 0.09, 0.14, 0.02, 0.012, 0.15, grey(0.5), 0, [5, 3]); // dorsal stripe
+  for (let i = 0; i < 4; i++) ellipsoid(parts, 0, 0.04 - i * 0.006, -0.1 - i * 0.11, 0.034 - i * 0.007, 0.028 - i * 0.006, 0.075, grey(0.8 - i * 0.07), 0, [5, 3]); // tail
+  for (const sx of [-1, 1]) {
+    box(parts, sx * 0.085, 0.03, 0.24, 0.1, 0.018, 0.022, grey(0.7), 0, sx * 0.5);
+    box(parts, sx * 0.09, 0.03, 0.01, 0.11, 0.018, 0.024, grey(0.7), 0, -sx * 0.55);
+  }
+  return mergeParts(parts);
+}
+
+/** A flat ring on the XZ plane, outer radius 1 (a ripple, scaled as it spreads). White; brightness fades from the crest inward. */
+export function createRing(): BufferGeometry {
+  const N = 20;
+  const pos: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    pos.push(c * 0.8, 0, s * 0.8, c * 0.94, 0, s * 0.94, c, 0, s);
+    col.push(0, 0, 0, 1, 1, 1, 0, 0, 0);
+    const a0 = i * 3;
+    const b0 = ((i + 1) % N) * 3;
+    idx.push(a0, b0, a0 + 1, b0, b0 + 1, a0 + 1, a0 + 1, b0 + 1, a0 + 2, b0 + 1, b0 + 2, a0 + 2);
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}

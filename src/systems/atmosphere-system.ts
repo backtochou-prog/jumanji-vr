@@ -6,7 +6,7 @@ import { loadComfort } from '../settings/comfort.js';
 /**
  * Atmosphere. Three independent channels, all eased, all written to the scene at 4 Hz and only when something really changed:
  *
- *  open   (0..1)  HEIGHT based, only on the mountain (x > MZ.x0 - 4): the jungle's short wet view opens to hundreds of metres, the fog thins to 0.0036 and the
+ *  open   (0..1)  HEIGHT based, only on the mountain (x > MZ.x0 - 4): the jungle's short wet view opens to hundreds of metres, the fog thins to 0.0022 and the
  *                 camera far plane grows from JUNGLE_FAR (260 m) to 1 km. It never changes on the Overlook Knoll (x <= 18, so `open` is 0 there).
  *  vista  (0..1)  POSITION based (never height): 1 on the knoll crown, 0 from 32 m down the ramp (`vistaAt`, layout.ts). The sunlit lookout gets lighter, warmer
  *                 fog (density x 0.65: the backdrop fall at 122 m goes from 74 % to ~42 % fogged), a bluer sky, an open-sky hemisphere fill, and
@@ -22,18 +22,18 @@ import { loadComfort } from '../settings/comfort.js';
 export const atmosphere = { open: 0, far: JUNGLE_FAR, density: 0.0095, vista: 0, veil: 0 };
 
 const FOG_JUNGLE = 0.0095;
-const FOG_SUMMIT = 0.0036;
+const FOG_SUMMIT = 0.0016; // clear mountain air: the far ranges (380 - 580 m) keep 50 - 20 % of their colour, the valley floor 85 %
 /** Fog density at vista = 1 relative to the jungle's (0.0095 -> ~0.0062). Below ~0.0060 the 100 m cell cap would show sideways: see jungleCellCap. */
 const FOG_VISTA_K = 0.65;
 /** Fog density multiplier of the reveal veil at veil = 1. */
 const VEIL_FOG = 0.55;
 
-const FOG_COLOR_JUNGLE = new Color('#a9c4b3');
-const FOG_COLOR_OPEN = new Color('#b4cbd0'); // a touch bluer and brighter: valley haze
-const FOG_COLOR_VISTA = new Color('#c9cfc0'); // warm pale haze of the sunlit lookout
-const SKY_JUNGLE = [0.3, 0.55, 0.58];
-const SKY_OPEN = [0.3, 0.58, 0.86];
-const SKY_VISTA = [0.27, 0.57, 0.82];
+const FOG_COLOR_JUNGLE = new Color('#b3cbd8'); // pale blue haze: the horizon band of the blue sky
+const FOG_COLOR_OPEN = new Color('#b2c4cf'); // golden-hour valley haze: pale and warm (the far ranges bake their feet in this colour)
+const FOG_COLOR_VISTA = new Color('#c2d3df'); // warm pale haze of the sunlit lookout
+const SKY_JUNGLE = [0.2, 0.47, 0.88]; // clear blue (was a teal-green canopy tint)
+const SKY_OPEN = [0.22, 0.5, 0.88];
+const SKY_VISTA = [0.2, 0.48, 0.9];
 const SKY_VISTA_MIX = 0.7;
 /** Canopy-fill hemisphere light at vista = 1: open-sky blue from above, warm meadow bounce from below, slightly less intensity (the sun does the work). */
 const HEMI_SKY_VISTA = [0.52, 0.68, 0.92];

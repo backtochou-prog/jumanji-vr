@@ -13,7 +13,7 @@
  */
 import { BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, Uint32BufferAttribute } from '@iwsdk/core';
 import { terrainHeight } from '../world/layout.js';
-import { BASIN_Y, D_BRINK, THETA_GORGE, VALLEY_RIVER, riverBedY, riverPoint, slotFloorHalf } from '../world/mountain.js';
+import { BASIN_Y, D_BRINK, PLATFORM, THETA_GORGE, VALLEY, VALLEY_RIVER, riverBedY, riverPoint, slotFloorHalf } from '../world/mountain.js';
 import { PAL } from '../world/palette.js';
 import { lightShaftMaterial, waterMaterial, waterfallMaterial } from './lib/materials.js';
 
@@ -247,20 +247,24 @@ export function createGiantFall(): Group {
   g.name = 'GiantFall';
   const plunge = axisProfile(D_BRINK + 1.2, 52, 0.25, 0);
   const cascade = axisProfile(130, 104, 0.5, 0);
-  const mainP = sheet(plunge, 22, (t) => 4.6 + 2.2 * t, 0.85, 0.9, 0, 6.5, 1, 'FallMain');
+  // the main sheet leaves the lip as wide as the slot and fans out as it falls: a broad white curtain, readable from the summit 150 m away
+  const mainW = (t: number): number => 4.8 + 5.4 * Math.pow(t, 0.8);
+  const mainP = sheet(plunge, 22, mainW, 0.85, 0.9, 0, 6.5, 2, 'FallMain');
   const mainC = sheet(cascade, 14, (t) => 3.0 + 1.2 * t, 0.45, 0.4, 0, 5.5, 1, 'CascadeMain');
   const near = mergeSheets(
     [
       mainP,
-      sheet(plunge, 18, (t) => 1.2 + 0.6 * t, 1.5, 1.4, 5.6, 5.0, 2, 'FallStrandL'),
-      sheet(plunge, 18, (t) => 1.0 + 0.5 * t, 1.7, 1.3, -5.2, 4.3, 3, 'FallStrandR'),
+      sheet(plunge, 18, (t) => 1.3 + 1.6 * t, 1.5, 1.4, 6.4, 5.0, 2, 'FallStrandL'),
+      sheet(plunge, 18, (t) => 1.1 + 1.4 * t, 1.7, 1.3, -6.0, 4.3, 3, 'FallStrandR'),
+      sheet(plunge, 12, (t) => 0.6 + 0.9 * t, 1.2, 1.1, 10.4, 3.8, 2, 'FallThreadL'),
+      sheet(plunge, 12, (t) => 0.5 + 0.8 * t, 1.3, 1.0, -9.8, 3.5, 2, 'FallThreadR'),
       mainC,
       sheet(cascade, 12, (t) => 0.9, 0.7, 0.6, 2.6, 4.2, 2, 'CascadeStrand'),
     ],
     'FallNear',
   );
   const far = mergeSheets(
-    [sheet(plunge, 8, (t) => 4.6 + 2.2 * t, 0.85, 0.9, 0, 6.5, 1, 'FallMain'), sheet(cascade, 5, (t) => 3.0 + 1.2 * t, 0.45, 0.4, 0, 5.5, 1, 'CascadeMain')],
+    [sheet(plunge, 8, mainW, 0.85, 0.9, 0, 6.5, 2, 'FallMain'), sheet(cascade, 5, (t) => 3.0 + 1.2 * t, 0.45, 0.4, 0, 5.5, 1, 'CascadeMain')],
     'FallFar',
   );
   far.visible = false;
@@ -302,9 +306,57 @@ export function createFallMist(): Mesh {
   const tint: [number, number, number] = [0.78, 0.92, 0.96];
   const [px, pz] = riverPoint(54);
   // Plunge pool: a wide spray bank on the water and cards rising from the impact.
-  mistDisc(px, BASIN_Y + 0.6, pz, 10, 0.11, tint, parts);
+  mistDisc(px, BASIN_Y + 0.6, pz, 16, 0.13, tint, parts);
   const [ix, iz] = riverPoint(61);
   for (let k = 0; k < 6; k++) mistCard(ix + Math.cos(k * 2.1) * 3, BASIN_Y + 0.5, iz + Math.sin(k * 2.1) * 3, k * 0.8, 13, 18, 0.1, tint, parts);
+  // The plume: tall, wide cards that carry the spray half-way up the fall (seen from the summit as the white cloud at its foot).
+  for (let k = 0; k < 5; k++) mistCard(ix + Math.cos(k * 1.3 + 0.5) * 6, BASIN_Y + 0.5, iz + Math.sin(k * 1.3 + 0.5) * 6, k * 0.63 + 0.3, 24, 34, 0.085, tint, parts);
+  // Valley mist: thin sunlit banks lying on the canopy far below the lookout (warm, very low brightness; several overlap into drifts).
+  const warm: [number, number, number] = [0.98, 0.9, 0.74];
+  const banks: [number, number, number, number][] = [
+    [0.15, 30, -27, 46],
+    [1.2, 64, -31, 58],
+    [2.3, 48, -24, 40],
+    [3.4, 78, -30, 62],
+    [4.4, 40, -28, 44],
+    [5.5, 70, -33, 54],
+  ];
+  for (const [a, d, y, r] of banks) mistDisc(VALLEY.x + Math.cos(a) * d, y, VALLEY.z + Math.sin(a) * d, r, 0.12, warm, parts);
+  // The spray-bow: a rainbow standing in the plume, turned to face the summit lookout (additive colour bands, black = invisible at both edges).
+  {
+    const [rx, rz] = riverPoint(60);
+    const fx = PLATFORM.x - rx;
+    const fz = PLATFORM.z - rz;
+    const fl = Math.hypot(fx, fz) || 1;
+    const sx = -fz / fl; // the bow's horizontal axis: across the line of sight
+    const sz = fx / fl;
+    const R = 27;
+    const cy = BASIN_Y - 3;
+    const bands: [number, number, number, number][] = [
+      [R - 2.0, 0, 0, 0],
+      [R - 1.3, 0.1, 0.07, 0.24],
+      [R - 0.6, 0.05, 0.2, 0.13],
+      [R + 0.1, 0.22, 0.2, 0.04],
+      [R + 0.8, 0.24, 0.07, 0.04],
+      [R + 1.6, 0, 0, 0],
+    ];
+    const seg = 20;
+    const base = parts.p.length / 3;
+    for (let j = 0; j <= seg; j++) {
+      const th = (0.08 + 0.84 * (j / seg)) * Math.PI;
+      const fadeEnds = Math.min(1, Math.sin(th) * 2.2);
+      for (const [r, cr, cg, cb] of bands) {
+        parts.p.push(rx + sx * Math.cos(th) * r, cy + Math.sin(th) * r, rz + sz * Math.cos(th) * r);
+        parts.c.push(cr * fadeEnds, cg * fadeEnds, cb * fadeEnds);
+      }
+    }
+    const nb = bands.length;
+    for (let j = 0; j < seg; j++)
+      for (let b = 0; b + 1 < nb; b++) {
+        const a = base + j * nb + b;
+        parts.i.push(a, a + 1, a + nb, a + 1, a + nb + 1, a + nb);
+      }
+  }
   // Cascade foot (just upstream of the bridge): a cloud around the impact.
   const [cxm, czm] = riverPoint(108);
   const cy = riverBedY(108) + 0.8;

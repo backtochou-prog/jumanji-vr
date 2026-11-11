@@ -4,6 +4,7 @@ import { qualityState } from '../settings/quality.js';
 import { loadComfort } from '../settings/comfort.js';
 import { terrainHeight } from '../world/layout.js';
 import { swayState } from '../scene-assets/lib/materials.js';
+import { weather } from '../world/weather.js';
 import { atmosphere } from '../systems/atmosphere-system.js';
 import { Birds } from './birds.js';
 import { wctx, wildlifeStats } from './context.js';
@@ -207,7 +208,8 @@ export class ReactiveFoliageSystem extends createSystem({}) {
       this.nextCheck = time + 1;
       this.reduced = loadComfort().reducedMotion;
     }
-    swayState.wind.value += ((this.reduced ? 0.4 : 1) - swayState.wind.value) * 0.1;
+    // the gusts of the shared weather (world/weather.ts) move the plants, the leaf hiss and the falling leaves together
+    swayState.wind.value += ((this.reduced ? 0.4 : weather.wind) - swayState.wind.value) * 0.1;
     const b = swayState.body.value;
     this.player.getWorldPosition(this.v);
     b[0].set(this.v.x, this.v.y + 0.55, this.v.z);

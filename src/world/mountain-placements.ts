@@ -119,15 +119,17 @@ function edgeSafe(x: number, z: number, r = 5, drop = 5): boolean {
 const vigor = (y: number, floor = 0.3): number => 1 - (1 - floor) * smoothstep(12, 34, y);
 
 /** Is the point inside the cone in front of the summit lip (kept open so the view is not blocked)? */
-function inSummitVista(x: number, z: number): boolean {
+function inSummitVista(x: number, z: number, wide = false): boolean {
   const dx = x - PLATFORM.x;
   const dz = z - PLATFORM.z;
   const dist = Math.hypot(dx, dz);
-  if (dist > 60) return false;
+  if (dist > (wide ? 78 : 60)) return false;
   const vx = VALLEY.x - PLATFORM.x;
   const vz = VALLEY.z - PLATFORM.z;
   const vl = Math.hypot(vx, vz);
   const along = (dx * vx + dz * vz) / vl;
+  // `wide` (trees only): the whole half-disc in front of the lookout stays free of trunks, so the panorama over the valley is open from wall to wall
+  if (wide) return along > -6 && Math.abs((-dx * vz + dz * vx) / vl) < 30 + along * 1.5;
   return along > -2 && Math.abs((-dx * vz + dz * vx) / vl) < 14 + along * 0.9;
 }
 
@@ -161,7 +163,7 @@ export function mountainTrees(): TreePlacement[] {
     for (const side of [1, -1]) {
       const x = f.x + f.nx * side * 9.5;
       const z = f.z + f.nz * side * 9.5;
-      if (!reserved(x, z, 3) && !inSummitVista(x, z) && edgeSafe(x, z, 6, 6) && free(x, z, TREE_COLLIDER.giant * 1.2)) {
+      if (!reserved(x, z, 3) && !inSummitVista(x, z, true) && edgeSafe(x, z, 6, 6) && free(x, z, TREE_COLLIDER.giant * 1.2)) {
         push(x, z, 'giant', 2, rng() * TAU, 1.2, 'hi');
         break;
       }
@@ -176,7 +178,7 @@ export function mountainTrees(): TreePlacement[] {
     const z = VALLEY.z + Math.sin(a) * d;
     if (terrainSlope(x, z, 1.5) > 0.5 || valleyRiverDistance(x, z) < 12 || Math.hypot(x - riverPoint(54)[0], z - riverPoint(54)[1]) < 28) continue;
     if (!free(x, z, TREE_COLLIDER.giant * 1.6 + 6)) continue;
-    const sc = 1.5 + rng() * 0.4;
+    const sc = 1.02 + rng() * 0.22; // crowns stand just proud of the canopy, well under the summit's eye line (taller ones read as bare poles across the panorama)
     push(x, z, 'giant', n % 3, rng() * TAU, sc, 'lo');
     emergents.push({ x, z, sc });
     n++;
@@ -197,7 +199,7 @@ export function mountainTrees(): TreePlacement[] {
       const off = f.hw + 2.6 + Math.pow(rng(), 1.5) * 40;
       const x = f.x + f.nx * side * off;
       const z = f.z + f.nz * side * off;
-      if (mountainWeight(x, z) < 0.35 || reserved(x, z, 2.2) || inSummitVista(x, z)) continue;
+      if (mountainWeight(x, z) < 0.35 || reserved(x, z, 2.2) || inSummitVista(x, z, true)) continue;
       const y = terrainHeight(x, z);
       if (!standable(x, z, 0.85) || !edgeSafe(x, z)) continue;
       const p = (0.85 - 0.5 * smoothstep(8, 30, y)) * (1 - 0.55 * smoothstep(16, 40, off));

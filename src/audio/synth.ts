@@ -4,6 +4,7 @@
  *
  *   beds      wind (low rumble with slow swells), white/brown noise (shaped live into streams and waterfalls), bubbles (a trickle), cicadas, crickets
  *   calls     scarlet macaw squawk, toucan croak, parakeet chatter, songbird whistle, monkey hoot, spider-monkey whoop (3 variants each)
+ *   world     footsteps on seven surfaces, foliage rustles (with or without a twig snap), a distant thunder roll, the Heartstone's hum (a loop)
  * Loops are made seamless by cross-fading their ends. Sample rate is low (24 kHz: the content is below 8 kHz) to keep memory and start-up cost small.
  */
 import { makeRandom } from '../world/layout.js';
@@ -269,6 +270,196 @@ export const CALL_MAKERS = {
   'monkey-hoot': monkeyHoot,
   'monkey-whoop': monkeyWhoop,
 } as const;
+
+// ----------------------------------------------------------------------------- the reactive world (footsteps, rustles, thunder, the Heartstone)
+
+/** In-place one-pole low-pass then high-pass (cutoffs in Hz; 0 = skip). Cheap spectral shaping for noise. */
+function shape(buf: Float32Array, lp: number, hp: number): Float32Array {
+  if (lp > 0) {
+    const a = 1 - Math.exp((-TAU * lp) / SR);
+    let y = 0;
+    for (let i = 0; i < buf.length; i++) {
+      y += (buf[i] - y) * a;
+      buf[i] = y;
+    }
+  }
+  if (hp > 0) {
+    const a = 1 - Math.exp((-TAU * hp) / SR);
+    let y = 0;
+    for (let i = 0; i < buf.length; i++) {
+      y += (buf[i] - y) * a;
+      buf[i] -= y;
+    }
+  }
+  return buf;
+}
+
+function normalise(buf: Float32Array, peakTo = 0.8): Float32Array {
+  let peak = 1e-6;
+  for (const v of buf) peak = Math.max(peak, Math.abs(v));
+  const g = peakTo / peak;
+  for (let i = 0; i < buf.length; i++) buf[i] *= g;
+  // 3 ms fades so no one-shot can start or end on a step
+  const f = Math.min(Math.floor(0.003 * SR), buf.length >> 1);
+  for (let i = 0; i < f; i++) {
+    buf[i] *= i / f;
+    buf[buf.length - 1 - i] *= i / f;
+  }
+  return buf;
+}
+
+export type StepSurface = 'water' | 'mud' | 'stone' | 'grass' | 'litter' | 'wood' | 'rock';
+
+interface StepSpec {
+  dur: number;
+  /** Body: a damped sine thud (Hz, level, decay s). */
+  thud: [number, number, number];
+  /** Texture: shaped noise (level, low-pass Hz, high-pass Hz, attack s, decay s). */
+  noise: [number, number, number, number, number];
+  /** Crackle: number of tiny grains (dry leaves, grit) and their level. */
+  grains: [number, number];
+  /** Rising chirps (water drops) and their level. */
+  chirps: [number, number];
+}
+
+const STEP_SPECS: Record<StepSurface, StepSpec> = {
+  litter: { dur: 0.26, thud: [95, 0.35, 0.05], noise: [0.5, 5200, 900, 0.006, 0.07], grains: [16, 0.5], chirps: [0, 0] },
+  grass: { dur: 0.28, thud: [85, 0.22, 0.05], noise: [0.6, 3600, 1300, 0.03, 0.09], grains: [3, 0.15], chirps: [0, 0] },
+  mud: { dur: 0.34, thud: [120, 0.6, 0.07], noise: [0.5, 900, 120, 0.02, 0.1], grains: [0, 0], chirps: [3, 0.25] },
+  stone: { dur: 0.16, thud: [210, 0.6, 0.025], noise: [0.5, 6500, 1800, 0.001, 0.018], grains: [2, 0.2], chirps: [0, 0] },
+  water: { dur: 0.5, thud: [140, 0.3, 0.05], noise: [0.8, 4200, 500, 0.012, 0.16], grains: [0, 0], chirps: [9, 0.4] },
+  wood: { dur: 0.24, thud: [150, 0.9, 0.06], noise: [0.22, 2400, 400, 0.002, 0.03], grains: [0, 0], chirps: [0, 0] },
+  rock: { dur: 0.2, thud: [170, 0.4, 0.03], noise: [0.55, 7000, 2200, 0.004, 0.05], grains: [10, 0.45], chirps: [0, 0] },
+};
+
+/** One footstep on a surface. Different seeds give different steps (the engine keeps 3 per surface and varies pitch and level on top). */
+export function footstep(surface: StepSurface, seed: number): Float32Array {
+  const sp = STEP_SPECS[surface];
+  const r = makeRandom(seed);
+  const n = Math.floor(sp.dur * SR);
+  const tex = new Float32Array(n);
+  const [nl, lp, hp, att, dec] = sp.noise;
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    tex[i] = (r() * 2 - 1) * Math.min(1, t / att) * Math.exp(-Math.max(0, t - att) / dec);
+  }
+  shape(tex, lp * (0.9 + r() * 0.2), hp);
+  let peak = 1e-6;
+  for (const v of tex) peak = Math.max(peak, Math.abs(v));
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = (tex[i] / peak) * nl;
+  // thud (the foot's weight): two partials so the wooden deck sounds hollow rather than pure
+  const [tf, tl, td] = sp.thud;
+  const f0 = tf * (0.9 + r() * 0.2);
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    out[i] += (Math.sin(TAU * f0 * t) + (surface === 'wood' ? 0.5 * Math.sin(TAU * f0 * 2.31 * t) : 0)) * Math.exp(-t / td) * tl * Math.min(1, t / 0.002);
+  }
+  // grains: dry leaves cracking, grit under a boot
+  for (let k = 0; k < sp.grains[0]; k++) {
+    const at = Math.floor(r() * (n - 200) * 0.75);
+    const len = 20 + Math.floor(r() * 60);
+    const a = sp.grains[1] * (0.3 + 0.7 * r()) * (1 - at / n);
+    for (let i = 0; i < len; i++) out[at + i] += (r() * 2 - 1) * a * (1 - i / len);
+  }
+  // chirps: drops and the suck of mud
+  for (let k = 0; k < sp.chirps[0]; k++) {
+    const at = Math.floor((0.03 + r() * 0.5) * n);
+    const f = (surface === 'mud' ? 260 : 700) + r() * (surface === 'mud' ? 300 : 1500);
+    const d = 0.015 + r() * 0.03;
+    const len = Math.min(n - at, Math.floor(d * SR));
+    for (let i = 0; i < len; i++) {
+      const t = i / SR;
+      out[at + i] += Math.sin(TAU * f * (1 + 1.6 * (t / d)) * t) * Math.exp((-t / d) * 3.5) * sp.chirps[1] * (0.4 + 0.6 * r());
+    }
+  }
+  return normalise(out);
+}
+
+/** Something moving through foliage: a second or so of leaf noise in irregular bursts; `snap` adds one dry twig crack. */
+export function rustle(seed: number, snap = false): Float32Array {
+  const r = makeRandom(seed);
+  const dur = 0.7 + r() * 0.5;
+  const n = Math.floor(dur * SR);
+  const envl = new Float32Array(n);
+  const bursts = 5 + Math.floor(r() * 5);
+  for (let k = 0; k < bursts; k++) {
+    const at = Math.floor(r() * n * 0.8);
+    const len = Math.floor((0.05 + r() * 0.16) * SR);
+    const a = 0.35 + 0.65 * r();
+    for (let i = 0; i < len && at + i < n; i++) envl[at + i] += a * Math.sin((Math.PI * i) / len) ** 2;
+  }
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = (r() * 2 - 1) * envl[i];
+  shape(out, 5200, 1400);
+  if (snap) {
+    const at = Math.floor((0.15 + r() * 0.4) * n);
+    const f = 900 + r() * 700;
+    const len = Math.min(n - at, Math.floor(0.05 * SR));
+    for (let i = 0; i < len; i++) {
+      const t = i / SR;
+      out[at + i] += ((r() * 2 - 1) * 0.6 + Math.sin(TAU * f * t) * 0.5) * Math.exp(-t / 0.009) * 0.5;
+    }
+  }
+  return normalise(out, 0.7);
+}
+
+/** A far-off roll of thunder: only the low end arrives (no crack), in a few overlapping swells that die away over several seconds. */
+export function thunder(seed: number): Float32Array {
+  const r = makeRandom(seed);
+  const dur = 6.5 + r() * 2;
+  const n = Math.floor(dur * SR);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = r() * 2 - 1;
+  shape(out, 110, 0);
+  shape(out, 190, 24);
+  const envl = new Float32Array(n);
+  const swells = 4 + Math.floor(r() * 3);
+  for (let k = 0; k < swells; k++) {
+    const at = (k === 0 ? 0.25 : 0.25 + r() * dur * 0.5) * SR;
+    const rise = (0.25 + r() * 0.5) * SR;
+    const fall = (0.9 + r() * 1.6) * SR;
+    const a = k === 0 ? 1 : 0.35 + 0.6 * r();
+    for (let i = Math.floor(at); i < n; i++) {
+      const u = i - at;
+      envl[i] += a * Math.min(1, u / rise) * Math.exp(-Math.max(0, u - rise) / fall);
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const tail = Math.min(1, (n - i) / (1.5 * SR));
+    out[i] *= envl[i] * tail * Math.min(1, i / (0.2 * SR));
+  }
+  return normalise(out, 0.8);
+}
+
+/**
+ * The Heartstone's hum (a seamless loop): a low fifth with a slowly beating third partial and a faint breath of air - a sound that is felt more than
+ * heard. Every partial completes a whole number of cycles in the loop.
+ */
+export function heartHum(seconds = 8, seed = 61): Float32Array {
+  const r = makeRandom(seed);
+  const n = Math.floor(seconds * SR);
+  const out = new Float32Array(n);
+  const q = (f: number) => Math.round(f * seconds) / seconds;
+  const partials: [number, number][] = [
+    [q(98), 0.5],
+    [q(147), 0.3],
+    [q(147.25), 0.3], // beats against the fifth every 4 s
+    [q(196.125), 0.16],
+    [q(294.5), 0.07],
+  ];
+  const breathe = q(0.25);
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    let s = 0;
+    for (const [f, a] of partials) s += Math.sin(TAU * f * t) * a;
+    out[i] = s * (0.75 + 0.25 * Math.sin(TAU * breathe * t)) + (r() * 2 - 1) * 0.012;
+  }
+  let peak = 1e-6;
+  for (const v of out) peak = Math.max(peak, Math.abs(v));
+  for (let i = 0; i < n; i++) out[i] *= 0.6 / peak;
+  return out;
+}
 
 /** RMS and peak of a buffer (tests). */
 export function stats(buf: Float32Array): { rms: number; peak: number; seconds: number } {

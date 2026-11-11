@@ -22,6 +22,7 @@ import {
 import type { Material } from '@iwsdk/core';
 import { PAL, ROUGH } from '../../world/palette.js';
 import { FOLIAGE_ALPHA_TO_COVERAGE, leafAtlas } from './leaf-atlas.js';
+import { photoTexture } from './photo-textures.js';
 
 type Hex = `#${string}`;
 
@@ -75,20 +76,26 @@ export const groundMaterial = vertexColored(
     textures: { albedo: grain(11, '#55523f', '#f2efe2', 80), bump: bump(31, [90, 90], 0.75) },
   }),
 );
+// Photo detail from the reference video (mossy rock ground) replaces the procedural grain; the bump map stays.
+groundMaterial.map = photoTexture('moss');
 groundMaterial.onBeforeCompile = (shader) => {
+  // World-space projection (the terrain tiles' own UVs do not line up across tile edges, which a photo texture shows as a seam).
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec2 vGroundW;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGroundW = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;');
   // Two samples at different scales/rotations, mixed by a slow mask: no visible tiling at standing height.
-  shader.fragmentShader = shader.fragmentShader.replace(
+  shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vGroundW;').replace(
     '#include <map_fragment>',
     `#ifdef USE_MAP
-      vec2 gUv = vMapUv;
+      vec2 gUv = vGroundW / 2.2;
       vec4 gA = texture2D( map, gUv );
-      vec4 gB = texture2D( map, mat2( 0.8, -0.6, 0.6, 0.8 ) * gUv * 0.37 + vec2( 0.21, 0.63 ) );
+      vec4 gB = texture2D( map, mat2( 0.8, -0.6, 0.6, 0.8 ) * gUv * 0.37 + vec2( 0.21, 0.63 ), 3.0 ); // blurred (mip bias): tone only, photo cracks are not magnified
       float gM = smoothstep( 0.25, 0.75, 0.5 + 0.5 * sin( gUv.x * 0.71 + sin( gUv.y * 0.93 ) * 1.7 ) );
       diffuseColor *= mix( gA, gB, gM * 0.6 );
     #endif`,
   );
 };
-groundMaterial.customProgramCacheKey = () => 'jungle-ground-v2';
+groundMaterial.customProgramCacheKey = () => 'jungle-ground-v5';
 
 /**
  * Mountain ground: the same grain, but projected from above on flat ground and from the side on steep faces
@@ -105,12 +112,15 @@ export const mountainGroundMaterial = vertexColored(
     textures: { albedo: grain(11, '#55523f', '#f2efe2', 80) },
   }),
 );
+mountainGroundMaterial.map = photoTexture('ledge');
+const cliffTex = { value: photoTexture('cliff') };
 mountainGroundMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.uCliff = cliffTex;
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
     .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;\nvWNor = normalize( mat3( modelMatrix ) * objectNormal );');
   shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;\nuniform sampler2D uCliff;')
     .replace(
       '#include <map_fragment>',
       `#ifdef USE_MAP
@@ -118,12 +128,15 @@ mountainGroundMaterial.onBeforeCompile = (shader) => {
       float steep = smoothstep( 0.5, 0.82, 1.0 - wn.y );
       vec2 gUv = vWPos.xz / 2.5;
       vec4 gA = texture2D( map, gUv );
-      vec4 gB = texture2D( map, mat2( 0.8, -0.6, 0.6, 0.8 ) * gUv * 0.37 + vec2( 0.21, 0.63 ) );
+      vec4 gB = texture2D( map, mat2( 0.8, -0.6, 0.6, 0.8 ) * gUv * 0.37 + vec2( 0.21, 0.63 ), 3.0 ); // blurred (mip bias): tone only, photo cracks are not magnified
       float gM = smoothstep( 0.25, 0.75, 0.5 + 0.5 * sin( gUv.x * 0.71 + sin( gUv.y * 0.93 ) * 1.7 ) );
       vec4 gTop = mix( gA, gB, gM * 0.6 );
       if ( steep > 0.01 ) {
-        vec4 sx = texture2D( map, vec2( vWPos.z, vWPos.y ) / 2.5 );
-        vec4 sz = texture2D( map, vec2( vWPos.x, vWPos.y ) / 2.5 + vec2( 0.37, 0.11 ) );
+        // cliff faces: the video's rock wall at two scales (8 m strata up close, 57 m banding that survives at 150 m)
+        vec2 ux = vec2( vWPos.z, vWPos.y );
+        vec2 uz = vec2( vWPos.x, vWPos.y );
+        vec4 sx = texture2D( uCliff, ux / 8.0 ) * ( 0.72 + 0.72 * texture2D( uCliff, ux / 57.0 + vec2( 0.3, 0.6 ) ) );
+        vec4 sz = texture2D( uCliff, uz / 8.0 + vec2( 0.37, 0.11 ) ) * ( 0.72 + 0.72 * texture2D( uCliff, uz / 57.0 ) );
         float wx = wn.x * wn.x;
         float wz = wn.z * wn.z;
         gTop = mix( gTop, ( sx * wx + sz * wz ) / max( wx + wz, 1e-4 ), steep );
@@ -132,7 +145,7 @@ mountainGroundMaterial.onBeforeCompile = (shader) => {
     #endif`,
     );
 };
-mountainGroundMaterial.customProgramCacheKey = () => 'mountain-ground-v1';
+mountainGroundMaterial.customProgramCacheKey = () => 'mountain-ground-v5';
 
 // ---------------------------------------------------------------------------
 // Foliage cards (+ wood parts of plants/trees that must share the draw call)
@@ -147,13 +160,13 @@ export { FOLIAGE_ALPHA_TO_COVERAGE };
 
 /**
  * Live wind / proximity state for the plant material. Written each frame by ReactiveFoliageSystem; the shader reads it.
- * `body` = 3 world points (feet and both hands) that push low plants aside.
+ * `body` = 4 world points that push low plants aside: the player's feet and both hands, and one animal you never see (LivingWorldSystem).
  * `time` and `wind` (1, or 0.4 in reduced-motion mode) also drive the tree-wind of `foliageCardMaterial` and the shimmer of `canopyMaterial`.
  */
 export const swayState = {
   time: { value: 0 },
   wind: { value: 1 },
-  body: { value: [new Vector3(0, -999, 0), new Vector3(0, -999, 0), new Vector3(0, -999, 0)] },
+  body: { value: [new Vector3(0, -999, 0), new Vector3(0, -999, 0), new Vector3(0, -999, 0), new Vector3(0, -999, 0)] },
 };
 
 /**
@@ -253,7 +266,7 @@ plantFoliageMaterial.onBeforeCompile = (shader) => {
   shader.uniforms.uWind = swayState.wind;
   shader.uniforms.uBody = swayState.body;
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute vec2 aSway;\nuniform float uTime;\nuniform float uWind;\nuniform vec3 uBody[3];')
+    .replace('#include <common>', '#include <common>\nattribute vec2 aSway;\nuniform float uTime;\nuniform float uWind;\nuniform vec3 uBody[4];')
     .replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
@@ -267,11 +280,11 @@ plantFoliageMaterial.onBeforeCompile = (shader) => {
     float amp = uWind * w * (0.012 + 0.028 * sqrt(sz));
     transformed.x += 0.82 * g * gust * amp + 0.15 * amp * sin(uTime * 7.3 + ph * 3.1);
     transformed.z += 0.57 * g * gust * amp;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
       vec3 pp = uBody[i];
       vec2 d = transformed.xz - pp.xz;
       float dist = length(d);
-      float reach = i == 0 ? 1.15 : 0.55;
+      float reach = i == 0 ? 1.15 : (i == 3 ? 1.0 : 0.55);
       float push = (1.0 - smoothstep(0.12, reach, dist)) * (1.0 - smoothstep(0.45, 1.15, abs(transformed.y - pp.y))) * w;
       transformed.xz += (d / max(dist, 0.05)) * push * (0.12 + 0.2 * min(sz, 1.6));
       transformed.y -= push * 0.06 * min(sz, 1.6);
@@ -279,7 +292,7 @@ plantFoliageMaterial.onBeforeCompile = (shader) => {
   }`,
     );
 };
-plantFoliageMaterial.customProgramCacheKey = () => 'jungle-plant-sway-v1';
+plantFoliageMaterial.customProgramCacheKey = () => 'jungle-plant-sway-v2';
 
 /**
  * Valley canopy: opaque lit crowns, vertex colour only (no texture, no alpha test: zero overdraw cost).
@@ -287,11 +300,25 @@ plantFoliageMaterial.customProgramCacheKey = () => 'jungle-plant-sway-v1';
  * so the carpet of crowns seems to breathe as the wind crosses the valley. The geometry itself stays rigid.
  */
 export const canopyMaterial = new MeshStandardMaterial({ name: 'mountain-canopy', vertexColors: true, roughness: ROUGH.foliage + 0.1, metalness: 0 });
+const canopyTex = { value: photoTexture('canopy') };
 canopyMaterial.onBeforeCompile = (shader) => {
   shader.uniforms.uTime = swayState.time;
   shader.uniforms.uWind = swayState.wind;
+  shader.uniforms.uCanopy = canopyTex;
+  // crown tops from the video, projected from above in world space (the clumps have no UVs); two scales so it holds from the summit
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vCanopyW;\nuniform sampler2D uCanopy;')
+    .replace(
+      '#include <map_fragment>',
+      `{
+        vec2 cUv = vCanopyW.xz + vCanopyW.y * vec2( 0.41, 0.29 );
+        vec3 cT = texture2D( uCanopy, cUv / 13.0 ).rgb * ( 0.5 + 0.62 * texture2D( uCanopy, cUv / 47.0 + vec2( 0.17, 0.53 ) ).rgb );
+        diffuseColor.rgb *= cT * 1.45;
+      }`,
+    );
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', `#include <common>\nuniform float uTime;\nuniform float uWind;\n${GUST_GLSL}`)
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCanopyW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;')
+    .replace('#include <common>', `#include <common>\nvarying vec3 vCanopyW;\nuniform float uTime;\nuniform float uWind;\n${GUST_GLSL}`)
     .replace(
       '#include <color_vertex>',
       `#include <color_vertex>
@@ -304,7 +331,7 @@ canopyMaterial.onBeforeCompile = (shader) => {
   #endif`,
     );
 };
-canopyMaterial.customProgramCacheKey = () => 'mountain-canopy-v2';
+canopyMaterial.customProgramCacheKey = () => 'mountain-canopy-v3';
 
 /** Cracks of the collapsing ledge: dark, unlit, fades in as the player approaches (opacity driven by CollapseSystem). */
 export const crackMaterial = new MeshBasicMaterial({ name: 'ledge-cracks', color: '#16110c', transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -322,6 +349,9 @@ export const rockMaterial = vertexColored(
     textures: { albedo: grain(15, '#aaa89f', '#ffffff', 20), bump: bump(25, [26, 26], 0.9) },
   }),
 );
+
+rockMaterial.map = photoTexture('rock'); // lichen-spotted boulder from the reference video
+rockMaterial.map.repeat.set(1.7, 1.7); // finer grain on the big boulders
 
 export const barkMaterial = vertexColored(
   createSceneMaterial({

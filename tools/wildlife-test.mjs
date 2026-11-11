@@ -548,7 +548,7 @@ try {
     for (const [name, x, z, yaw] of stations) {
       await place(x, z, yaw);
       await page.waitForTimeout(7000);
-      const read = () => E(() => { const r = window.__jumanjiPerf.world.renderer; return { calls: r.info.render.calls, tris: r.info.render.triangles, programs: r.info.programs.length }; });
+      const read = () => E(() => { const r = window.__jumanjiPerf.world.renderer; return { calls: r.info.render.calls, tris: r.info.render.triangles, programs: r.info.programs.length, names: r.info.programs.map((p) => `${p.name || '?'}#${p.id}`) }; });
       await E(() => window.__jumanjiWildlife.setEnabled(false));
       await page.waitForTimeout(2500);
       const off = await read();
@@ -562,7 +562,7 @@ try {
     check('desktop', 'draw calls: wildlife adds at most 16 draw calls and 18k triangles at any of the three jungle stations', rows.every((r) => r.on.calls - r.off.calls <= 16 && r.on.tris - r.off.tris <= 18000), rows.map((r) => `${r.name} +${r.on.calls - r.off.calls}/+${((r.on.tris - r.off.tris) / 1000).toFixed(1)}k`).join(', '));
     const prog0 = rows[0].off.programs;
     const prog1 = rows[rows.length - 1].on.programs;
-    check('desktop', 'shader programs: visiting every jungle station with wildlife compiles nothing new after the warm-up', prog1 === prog0, `${prog0} -> ${prog1}`);
+    check('desktop', 'shader programs: visiting every jungle station with wildlife compiles nothing new after the warm-up', prog1 === prog0, `${prog0} -> ${prog1}${prog1 === prog0 ? '' : ' new: ' + rows[rows.length - 1].on.names.filter((n) => !rows[0].off.names.includes(n)).join(', ')}`);
     results.browser = { rows };
 
     // ---- plants react to the player: same view with the body uniform at the player vs far away

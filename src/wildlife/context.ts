@@ -10,6 +10,8 @@ export interface CallSink {
   call(kind: CallKind, x: number, y: number, z: number, gain: number): void;
   /** A sudden disturbance (birds flushing): the background chorus goes quiet for `seconds`, then recovers. */
   hush(seconds: number, strength: number): void;
+  /** Foliage moving at a world position (optional: only the real sound engine has it). `snap` adds a twig crack. */
+  rustle?(x: number, y: number, z: number, gain: number, snap?: boolean): void;
 }
 
 export const wctx = {

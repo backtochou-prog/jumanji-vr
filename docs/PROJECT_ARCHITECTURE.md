@@ -240,7 +240,7 @@ so the displaced mesh is also what you collide with. Dirt trail ribbons follow t
 ### Systems
 | System | Job |
 | --- | --- |
-| `AtmosphereSystem` | player height → `open` (0 jungle .. 1 mountain): fog density 0.0095 → 0.0036, fog/dome colours, sky pole colour/elevation, camera far 260 (`JUNGLE_FAR`) → 1000 m |
+| `AtmosphereSystem` | player height → `open` (0 jungle .. 1 mountain): fog density 0.0095 → 0.0016, fog/dome colours, sky pole colour/elevation, camera far 260 (`JUNGLE_FAR`) → 1000 m |
 | `ChunkLodSystem` | cell distance rules + `viewCap(open)`; mountain cells/tiles/ridges capped at 26 m while the view is still jungle; jungle landmarks hidden beyond 150 m; far ranges only when open |
 | `CollapseSystem` | the state machine; cracks (overlay material opacity), 30 pebbles (one InstancedMesh), dust sprites, tremor, haptics, sink of the kinematic collider and the ride pieces, lip pieces on pre-simulated ballistics, reset |
 | `BridgeSystem` | moves bridge visuals + collider together by mm: idle 1.5 mm, loaded up to 12 mm sideways (0.45 Hz) / 6 mm vertical (0.9 Hz), peaks at mid-span; none in reduced-motion; `bridge.creaks` audio hook |
@@ -268,7 +268,7 @@ mist is additive and hidden in the 'low' tier; the waterfall is five sheets (one
 | Distance caps | `viewCap(open)` = 130 m .. 1030 m for everything; **mountain cells/tiles 26 m + 974 m x open** (hidden behind the jungle trees anyway while you are still in the jungle); **jungle cells and landmarks <= 150 m** while on the mountain | `layout.ts`, `ChunkLodSystem` |
 | Per-class range | trees-hi 38 m, plants 44 m, ground 34 m, rocks 54 m, deadwood 42 m, trees-lo/far <= 480 m, canopy <= 520 m, crags <= 760 m; the low tier tightens all of them | `CHUNK_LOD`, `CHUNK_LOW_MAX` |
 | Terrain LOD | the mountain is 96 m **root cells**; a root with detail draws its fine tiles (24 m at 1.5 m cells, merged into <= 4 draws per root) within **150 m** (100 m low tier, +-20 m hysteresis) and ONE coarse 6 m-cell mesh beyond it (`terrain-far`, no collision). Roots without detail (valley wall/floor at 4 m cells, far plateau) are merged into one draw, `Mountain_far`. Collision always uses the fine tiles | `terrain.scene-asset.ts`, `TERRAIN_LOD` |
-| Silhouettes | four far ranges (420-900 m, up to 300 m high) as **one** unlit mesh, drawn only when `open` > 0.25; the jungle ridge rings only when `open` < 0.5; fog 0.0125 -> 0.0036 and the dome colours follow `open`, so distant ground fades into the same haze the silhouettes carry | `background.scene-asset.ts`, `AtmosphereSystem` |
+| Silhouettes | three sun-shaded far ranges (380-580 m, up to 290 m high) plus six tepui mesas with thin falls (320-360 m) as **one** unlit mesh, drawn only when `open` > 0.25; the jungle ridge rings only when `open` < 0.5; fog 0.0125 -> 0.0016 and the dome colours follow `open`, so distant ground fades into the same haze the silhouettes carry | `background.scene-asset.ts`, `AtmosphereSystem` |
 | Waterfall | `FallNear` (5 sheets merged, 1 draw) within 240 m, `FallFar` (the two main sheets) beyond; mist within 480 m and never in the low tier | `falls.scene-asset.ts`, `ChunkLodSystem` |
 
 Cell sizes: 28 m for what you walk through, 56 m for the cheap trees (`trees-lo/far`), **128 m for `canopy` and `crags`** (a valley is a handful of draws).
@@ -351,7 +351,29 @@ src/audio/
 **Extending.** A new species: geometry in `models.ts`, a rig in `WildlifeSystem.init`, a module with `update(dt, ..., rigs)` that uses `wctx` and `perches`, and (if it calls) a buffer maker in `synth.ts` + a `CallKind`. Keep the draw count per species at 1-2, keep matrices CPU-written and only for creatures in the view cone, and add the checks to `tools/wildlife-test.mjs`.
 
 
-## 16. Known facts about this SDK/runtime
+## 16. The living world (Prompt 09)
+
+One system, `LivingWorldSystem` (`src/systems/living-world-system.ts`, registered right after `WildlifeSystem`), steps small pure simulations and feeds the existing audio engine. Everything testable lives in DOM-free modules.
+
+```
+world/weather.ts   gust, wind, light, thunder  ──┬─> foliage sway (ReactiveFoliageSystem reads weather.wind)
+                                                 ├─> audio.setEnvironment (wind + leaf bus), audio.thunder
+                                                 ├─> sun intensity (base x weather.light, <= 0.8 %/s)
+                                                 └─> leaves, motes
+world/surface.ts   surfaceAt(x, z, feetY)      ────> Stride -> audio.footstep(surface, side, gain); wading -> Ripples
+wildlife/living.ts Stride, FallingLeaves, Lizards, Ripples, UnseenMover, Motes, livingStats
+```
+
+- **Draws:** `Living leaves`, `Living lizards`, `Living ripples` are `InstanceRig`s (hidden when empty), `Living motes` is one `Points`. Max 3,320 triangles.
+- **Pools:** 14 leaves, 10 lizards, 8 rings, 54 points - fixed arrays, nothing allocated per frame, nothing spawned beyond the pool.
+- **Unseen animal:** no mesh. It moves the 4th push point of the plant-sway shader (`swayState.body.value[3]`), parked at y = -999 when idle.
+- **Areas:** entrance = more unseen-animal events and cicadas; trail = leaves, lizards, leaf litter; clearing = open pollen, crickets, Heartstone hum + embers. Area weights are computed in the system (see the `areaWeights` note in DEVELOPMENT_PROGRESS).
+- **Tiers / comfort:** low tier reduces counts (6 / 6 / 16); reduced motion freezes light at 1 and wind at 0.4.
+- **Audio additions** (`ambient-audio.ts`): `setEnvironment`, `setHeart`, `footstep`, `rustle`, `thunder`. Rustles borrow the call voices (need 3 free), footsteps have their own bus with a stereo panner, thunder is one voice at a time.
+- **Debug:** `window.__jumanjiLiving` (stats, weather, pools). **Tests:** `npm run living` (+ `--browser`, needs the server on :8081).
+- **To add a surface:** extend `Surface` in `surface.ts`, add a recipe in `synth.footstep`, add it to `STEP_SURFACES`/`STEP_LEVEL` in `ambient-audio.ts`, add a point to the surface test.
+
+## 17. Known facts about this SDK/runtime
 
 - IWSDK 1.1.0-rc.2 is a release candidate. Scene schema is strict (hex fog colour, view roles `hero|diagnostic`).
 - The managed browser in a no-display sandbox is headless software GL: frame rates there say nothing about Quest. Draw/triangle/overdraw counts there are exact.

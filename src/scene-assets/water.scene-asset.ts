@@ -15,8 +15,9 @@ import { PAL } from '../world/palette.js';
 import { mat, mergeBaked } from './lib/geo.js';
 import { waterMaterial } from './lib/materials.js';
 
-const SHALLOW = new Color(PAL.waterShallow).lerp(new Color(PAL.mud), 0.25);
-const DEEP = new Color(PAL.waterDeep).lerp(new Color('#0f2d2a'), 0.35);
+// Blackwater (igarape): forest streams of the Amazon run clear but tea-dark with tannin from the leaf litter. Jungle pool and stream only.
+const SHALLOW = new Color(PAL.waterShallow).lerp(new Color(PAL.mud), 0.25).lerp(new Color('#6a4a22'), 0.38);
+const DEEP = new Color(PAL.waterDeep).lerp(new Color('#0f2d2a'), 0.35).lerp(new Color('#17110a'), 0.5);
 
 function finish(positions: number[], colors: number[], uvs: number[], indices: number[], name: string): Mesh {
   const g = new BufferGeometry();

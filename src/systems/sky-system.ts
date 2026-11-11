@@ -3,7 +3,7 @@ import { atmosphere } from './atmosphere-system.js';
 import { qualityState } from '../settings/quality.js';
 import { loadComfort } from '../settings/comfort.js';
 import { smoothstep } from '../world/layout.js';
-import { createSkyClouds, createSkyGlow } from '../scene-assets/sky.scene-asset.js';
+import { SKY_RADIUS, createSkyClouds, createSkyGlow } from '../scene-assets/sky.scene-asset.js';
 
 /**
  * The sky pack of the Overlook Knoll (geometry: scene-assets/sky.scene-asset.ts): cloud banks, a warm sunward haze and a sun disc, two meshes sharing ONE
@@ -11,7 +11,8 @@ import { createSkyClouds, createSkyGlow } from '../scene-assets/sky.scene-asset.
  *
  *  - Built once in init() and added to the scene, hidden: warmShaders() (which shows hidden meshes for the compile) builds its single program with the rest.
  *  - Follows the player rig every frame (a sphere of 245 m around the head: no parallax, always inside the 260 m far plane, never frustum culled).
- *  - Exists only while `atmosphere.vista` > 0: faded by the vista (and thinned by the intro `veil`), hidden outright below 3 % so the jungle interior pays nothing.
+ *  - Exists while `atmosphere.vista` > 0 (the knoll: faded by the vista, thinned by the intro `veil`) or `atmosphere.open` > 0.3 (the mountain: the summit
+ *    panorama); hidden outright in the jungle interior, which pays nothing. On the mountain the sphere grows with the far plane (scale = far x 0.96 / 245).
  *  - Material: unlit, vertex RGBA, ordinary alpha blending (linear in display space), depthTest ON / depthWrite OFF (trees, ridges and the cliff occlude it),
  *    fog off and not tone mapped (it is a painted backdrop like the dome), renderOrder 0/1: BEFORE the water (2), the falls and the mist (3..5).
  *  - Drift: only the cloud mesh turns, 0.0015 rad/s (a bank crosses its own width in ~5 minutes); haze and sun stay put. Static with reduced motion.
@@ -30,6 +31,7 @@ export class SkySystem extends createSystem({}) {
   private shown = false;
   private reduced = false;
   private lastFade = -1;
+  private lastScale = 1;
 
   init(): void {
     this.reduced = loadComfort().reducedMotion;
@@ -73,10 +75,13 @@ export class SkySystem extends createSystem({}) {
   }
 
   update(delta: number): void {
-    // fade: the vista brings it in (smooth from 3 % to 55 %), the intro veil thins it while the air is still thick, the mountain never shows it
+    // fade: on the knoll the vista brings it in (smooth from 3 % to 55 %) and the intro veil thins it while the air is still thick; on the mountain the
+    // opening view brings it in (the summit panorama has the full sky: cloud banks, the low sun and its haze)
     const veil = Math.min(1, Math.max(0, atmosphere.veil));
-    const fade = smoothstep(ON, 0.55, atmosphere.vista) * (1 - 0.85 * veil) * (1 - atmosphere.open);
-    const want = this.shown ? atmosphere.vista > OFF && fade > 0.004 : atmosphere.vista > ON && fade > 0.01;
+    const knoll = atmosphere.vista > OFF ? smoothstep(ON, 0.55, atmosphere.vista) * (1 - 0.85 * veil) * (1 - atmosphere.open) : 0;
+    // the sky pack is drawn everywhere (blue sky + clouds through every canopy gap); the intro veil still thins it
+    const fade = Math.max(knoll, smoothstep(0.3, 0.85, atmosphere.open), 1 - 0.6 * veil);
+    const want = this.shown ? fade > 0.004 : fade > 0.01;
     if (want !== this.shown) {
       this.shown = want;
       this.glow.visible = want;
@@ -92,6 +97,12 @@ export class SkySystem extends createSystem({}) {
     // centre on the rig (+ eye height): the world position of the player rig, no allocation
     this.player.getWorldPosition(this.p);
     this.group.position.set(this.p.x, this.p.y + 1.6, this.p.z);
+    // the sphere stays just inside the far plane: 245 m in the jungle (far 260), ~960 m on the mountain (far 1 km), so the far ranges stand in front of it
+    const scale = Math.max(1, (atmosphere.far * 0.96) / SKY_RADIUS);
+    if (Math.abs(scale - this.lastScale) > 0.01) {
+      this.lastScale = scale;
+      this.group.scale.setScalar(scale);
+    }
     if (!this.reduced && !low) this.clouds.rotation.y += DRIFT * delta;
   }
 }

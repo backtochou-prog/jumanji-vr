@@ -39,8 +39,10 @@ const BUDGET = {
  * Wildlife is created at run time (src/wildlife), not by the asset manifest, so it is not in the numbers below. It is added to each viewpoint as a
  * RESERVE taken from `node tools/wildlife-test.mjs --browser` (measured: +12..14 draws and up to +16k triangles at the three jungle stations with every
  * creature type in view; the mountain only has the 4 soaring birds). The audit (npm run audit) then measures the real total.
+ * The living world (Prompt 09: falling leaves, lizards, water rings, pollen/embers) adds at most 3 instanced draws + 1 point cloud and 3,320 triangles
+ * (computed by tools/living-test.mjs from the geometry; the instanced meshes are hidden when empty) - included in the reserve below.
  */
-const WILDLIFE = { jungle: { tris: 16_000, draws: 16 }, mountain: { tris: 3_000, draws: 3 } };
+const WILDLIFE = { jungle: { tris: 19_500, draws: 20 }, mountain: { tris: 3_000, draws: 4 } };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const server = await createServer({ root, configFile: false, logLevel: 'error', appType: 'custom', server: { middlewareMode: true }, optimizeDeps: { noDiscovery: true } });
@@ -227,7 +229,7 @@ try {
   const SKYM = await server.ssrLoadModule('/src/scene-assets/sky.scene-asset.ts');
   const triCount = (g) => g.index.count / 3;
   const SKY = { clouds: triCount(SKYM.createSkyClouds()), glow: triCount(SKYM.createSkyGlow()) };
-  const skyReserve = (cam) => ((cam.vista ?? 0) > 0.09 ? { tris: LOW ? SKY.glow : SKY.clouds + SKY.glow, draws: LOW ? 1 : 2 } : { tris: 0, draws: 0 });
+  const skyReserve = (cam) => (cam ? { tris: LOW ? SKY.glow : SKY.clouds + SKY.glow, draws: LOW ? 1 : 2 } : { tris: 0, draws: 0 });
   console.log(`   sky pack (runtime, 1 material outside the manifest): clouds ${SKY.clouds} + haze/sun ${SKY.glow} triangles, 2 draws`);
   const views = [];
   const N = L.PATH_SAMPLES.length;

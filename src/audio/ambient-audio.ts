@@ -11,12 +11,21 @@
  *    are a random (Poisson-like) process whose rate follows the player (faster when standing still), and a disturbance (birds taking off) hushes the
  *    insects and wind for a few seconds before they come back - the jungle reacts.
  *  - Limits (Quest 2): at most 4 positional water loops, 4 insect loops, 8 call voices at once; buffers are generated in small slices so no frame stalls.
+ *  - The reactive layer (LivingWorldSystem): footsteps that match the surface underfoot (non-positional, alternating slightly left/right), foliage rustles
+ *    at a world position (an unseen animal, a lizard bolting, the player brushing through plants), a rare far-off thunder roll from a bearing, a leaf-hiss
+ *    layer that follows the same gusts as the plant shaders, the Heartstone's hum (a positional loop that follows the stone), and an insect/call mix that
+ *    shifts between the entrance, the trail and the clearing.
  *  - Mute with the board's Sound button, `?audio=0` or localStorage; the context is never created if disabled.
  */
 import { CLIFF, POOL, STREAM_SAMPLES, makeRandom, terrainHeight } from '../world/layout.js';
 import { BRIDGE, VALLEY, riverPoint } from '../world/mountain.js';
 import type { CallKind, CallSink } from '../wildlife/context.js';
-import { CALL_MAKERS, SR, bubbles, brownNoise, cicadas, crickets, whiteNoise, windBed } from './synth.js';
+import { CALL_MAKERS, SR, bubbles, brownNoise, cicadas, crickets, footstep, heartHum, rustle, thunder, whiteNoise, windBed } from './synth.js';
+import type { StepSurface } from './synth.js';
+
+const STEP_SURFACES: StepSurface[] = ['litter', 'grass', 'mud', 'stone', 'water', 'wood', 'rock'];
+/** Relative loudness of a step per surface (a splash carries, moss does not). */
+const STEP_LEVEL: Record<StepSurface, number> = { litter: 0.8, grass: 0.6, mud: 0.8, stone: 0.7, water: 1, wood: 0.9, rock: 0.75 };
 
 const PREF_KEY = 'jumanji-vr.sound.v1';
 
@@ -42,6 +51,17 @@ export const audioInfo = {
   masked: 0,
   listener: { x: 0, y: 0, z: 0 },
   gestures: 0,
+  /** Reactive layer. */
+  steps: 0,
+  lastSurface: '',
+  stepsBySurface: {} as Record<string, number>,
+  rustles: 0,
+  thunders: 0,
+  leaves: 0,
+  hum: 0,
+  gust: 0,
+  /** One-shot sources currently alive (footsteps, rustles, thunder): must return to 0 when the world is quiet. */
+  oneShots: 0,
 };
 
 interface Emitter {
@@ -104,7 +124,16 @@ export class AmbientAudio implements CallSink {
   private fallLevel = 1;
   private fallTau = 2.5;
   private fallApplied = 1;
-  private insectVoices: { src: AudioBufferSourceNode; panner: PannerNode; gain: GainNode; ang: number; rad: number; kind: string }[] = [];
+  private insectVoices: { src: AudioBufferSourceNode; panner: PannerNode; gain: GainNode; ang: number; rad: number; kind: string; level: number }[] = [];
+  private leafGain: GainNode | null = null;
+  private stepGain: GainNode | null = null;
+  private stepPan: StereoPannerNode | null = null;
+  private hum: { src: AudioBufferSourceNode; gain: GainNode; panner: PannerNode } | null = null;
+  private heart = { x: 0, y: 0, z: 0, level: 0 };
+  /** Weather and place, written by LivingWorldSystem (gust < 0 = nobody drives it: the engine wanders on its own). */
+  private env = { gust: -1, entrance: 0, trail: 1, clearing: 0 };
+  private lastStepAt = -1;
+  private lastRustleAt = -1;
   private voices: CallVoice[] = [];
   private rng = makeRandom(8128);
   private t = 0;
@@ -206,6 +235,15 @@ export class AmbientAudio implements CallSink {
     this.insectGain = this.bus(0);
     this.waterBus = this.bus(1);
     this.callBus = this.bus(1);
+    this.leafGain = this.bus(0);
+    // footsteps: not positional (they are yours), a touch left/right per foot
+    this.stepGain = ctx.createGain();
+    this.stepGain.gain.value = 1;
+    if (typeof ctx.createStereoPanner === 'function') {
+      this.stepPan = ctx.createStereoPanner();
+      this.stepGain.connect(this.stepPan);
+      this.stepPan.connect(this.master);
+    } else this.stepGain.connect(this.master);
     // call voices
     for (let i = 0; i < 8; i++) {
       const panner = this.makePanner('HRTF', 3, 1.15);
@@ -231,6 +269,12 @@ export class AmbientAudio implements CallSink {
       ['cricket', () => crickets(8, 17)],
     ];
     for (const kind of Object.keys(CALL_MAKERS) as (keyof typeof CALL_MAKERS)[]) for (let v = 0; v < 3; v++) need.push([kind, () => CALL_MAKERS[kind](100 + v * 37 + kind.length * 11)]);
+    // the reactive layer last: nothing below is needed in the first seconds
+    for (const sf of STEP_SURFACES) for (let v = 0; v < 3; v++) need.push([`step-${sf}`, () => footstep(sf, 500 + v * 53 + sf.length * 7)]);
+    for (let v = 0; v < 3; v++) need.push(['rustle', () => rustle(700 + v * 31)]);
+    for (let v = 0; v < 2; v++) need.push(['rustle-snap', () => rustle(800 + v * 43, true)]);
+    need.push(['hum', () => heartHum(8, 61)]);
+    for (let v = 0; v < 2; v++) need.push(['thunder', () => thunder(900 + v * 71)]);
     audioInfo.buffersTotal = need.length;
     for (const [name, make] of need) {
       this.queue.push(() => {
@@ -382,23 +426,36 @@ export class AmbientAudio implements CallSink {
     audioInfo.masked = 1 - mask;
 
     // ---- wind: a level that wanders (gusts) on top of an altitude/openness base
-    if (this.t >= this.nextGust) {
+    const env = this.env;
+    if (env.gust >= 0) this.gust = 0.5 + 0.8 * env.gust;
+    else if (this.t >= this.nextGust) {
       this.nextGust = this.t + 3 + this.rng() * 6;
       this.gust = 0.55 + this.rng() * 0.7;
     }
+    audioInfo.gust = this.gust;
     this.ensureWind(now);
     const windBase = 0.07 + 0.42 * Math.pow(open, 1.2);
     const wind = windBase * this.gust * (0.6 + 0.4 * this.hushLevel) * (0.5 + 0.5 * mask);
     this.windGain!.gain.setTargetAtTime(wind, now, 1.6);
     audioInfo.wind = wind;
+    // the hiss of leaves in the canopy: almost nothing in a calm, clearly there in a gust; fades out above the tree line
+    this.ensureLeaves(now);
+    const g01 = Math.min(1, Math.max(0, (this.gust - 0.5) / 0.8));
+    const leaves = (0.006 + 0.075 * Math.pow(g01, 1.4)) * (1 - 0.85 * open) * (0.5 + 0.5 * mask) * (0.7 + 0.3 * this.hushLevel);
+    this.leafGain!.gain.setTargetAtTime(leaves, now, 1.1);
+    audioInfo.leaves = leaves;
 
     // ---- insects: the jungle hum (4 positional voices around the player), strongest on the floor, gone on the open mountain
     this.ensureInsects(now);
-    const insect = 0.2 * Math.pow(1 - open, 1.5) * this.hushLevel * mask;
+    // place: a wall of cicadas at the entrance, an even mix on the trail, a hush in the clearing where crickets and the stone's hum take over
+    const insect = 0.2 * Math.pow(1 - open, 1.5) * this.hushLevel * mask * (1 + 0.12 * env.entrance - 0.3 * env.clearing);
+    const cicadaMix = 1.15 * env.entrance + env.trail + 0.3 * env.clearing;
+    const cricketMix = 0.75 * env.entrance + env.trail + 0.95 * env.clearing;
     this.insectGain!.gain.setTargetAtTime(insect, now, 1.2);
     audioInfo.insects = insect;
     audioInfo.insectVoices = this.insectVoices.length;
     for (const v of this.insectVoices) {
+      v.gain.gain.setTargetAtTime(v.level * (v.kind === 'cicada' ? cicadaMix : cricketMix), now, 2.5);
       v.ang += dt * (0.03 + 0.02 * Math.sin(v.rad));
       this.setPos(v.panner, px + Math.cos(v.ang) * v.rad, py - 0.5 + 1.2 * Math.sin(v.ang * 1.7), pz + Math.sin(v.ang) * v.rad, now);
     }
@@ -411,11 +468,54 @@ export class AmbientAudio implements CallSink {
       this.nextDistant = base * rate * (1 + 3.5 * open);
       if (this.hushLevel > 0.6) this.distantCall(px, py, pz, open);
     }
+
+    // ---- the Heartstone's hum: a positional loop that follows the stone, only while it is within earshot
+    const h = this.heart;
+    const hd = Math.hypot(h.x - px, h.y - py, h.z - pz);
+    if (!this.hum && h.level > 0 && hd < 42 && this.buffers['hum']?.length) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.buffers['hum'][0];
+      src.loop = true;
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      const panner = this.makePanner('HRTF', 2.2, 1.25);
+      src.connect(gain);
+      gain.connect(panner);
+      panner.connect(this.callBus!);
+      src.start(now);
+      this.hum = { src, gain, panner };
+    } else if (this.hum && (hd > 50 || h.level <= 0)) {
+      const n = this.hum;
+      this.hum = null;
+      n.gain.gain.setTargetAtTime(0, now, 0.4);
+      try {
+        n.src.stop(now + 2);
+      } catch {
+        /* already stopped */
+      }
+      setTimeout(() => {
+        try {
+          n.gain.disconnect();
+          n.panner.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }, 2600);
+    }
+    if (this.hum) {
+      this.setPos(this.hum.panner, h.x, h.y, h.z, now);
+      this.hum.gain.gain.setTargetAtTime(0.5 * h.level, now, 0.6);
+    }
+    audioInfo.hum = this.hum ? h.level : 0;
   }
 
   private distantCall(px: number, py: number, pz: number, open: number): void {
     const r = this.rng();
-    const kind: CallKind = open > 0.5 ? (r < 0.6 ? 'songbird' : r < 0.85 ? 'macaw' : 'toucan') : r < 0.34 ? 'songbird' : r < 0.58 ? 'parakeet' : r < 0.74 ? 'macaw' : r < 0.88 ? 'toucan' : r < 0.97 ? 'monkey-hoot' : 'monkey-whoop';
+    const e = this.env;
+    // the clearing is songbird country; the dark entrance is where the big animals call from
+    const kind: CallKind = open <= 0.5 && e.clearing > 0.6 ? (r < 0.58 ? 'songbird' : r < 0.8 ? 'parakeet' : r < 0.9 ? 'macaw' : r < 0.97 ? 'toucan' : 'monkey-hoot')
+      : open <= 0.5 && e.entrance > 0.6 ? (r < 0.2 ? 'songbird' : r < 0.36 ? 'parakeet' : r < 0.56 ? 'macaw' : r < 0.75 ? 'toucan' : r < 0.92 ? 'monkey-hoot' : 'monkey-whoop')
+      : open > 0.5 ? (r < 0.6 ? 'songbird' : r < 0.85 ? 'macaw' : 'toucan') : r < 0.34 ? 'songbird' : r < 0.58 ? 'parakeet' : r < 0.74 ? 'macaw' : r < 0.88 ? 'toucan' : r < 0.97 ? 'monkey-hoot' : 'monkey-whoop';
     const ang = this.rng() * Math.PI * 2;
     const rad = (open > 0.5 ? 70 : 38) + this.rng() * (open > 0.5 ? 130 : 80);
     const x = px + Math.cos(ang) * rad;
@@ -549,8 +649,145 @@ export class AmbientAudio implements CallSink {
       g.connect(p);
       p.connect(this.insectGain!);
       s.start(now, this.rng() * 4);
-      this.insectVoices.push({ src: s, panner: p, gain: g, ang: (i / defs.length) * Math.PI * 2 + this.rng(), rad, kind });
+      this.insectVoices.push({ src: s, panner: p, gain: g, ang: (i / defs.length) * Math.PI * 2 + this.rng(), rad, kind, level });
     });
+  }
+
+  private leavesStarted = false;
+  private ensureLeaves(now: number): void {
+    if (this.leavesStarted || !this.buffers['white']?.length) return;
+    this.leavesStarted = true;
+    const ctx = this.ctx!;
+    const s = ctx.createBufferSource();
+    s.buffer = this.buffers['white'][0];
+    s.loop = true;
+    s.playbackRate.value = 0.87;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 3400;
+    f.Q.value = 0.55;
+    s.connect(f);
+    f.connect(this.leafGain!);
+    s.start(now, 2.3);
+  }
+
+  // ------------------------------------------------------------------ the reactive layer (LivingWorldSystem)
+  /** Weather and place: `gust` 0..1 (world/weather.ts) and the three area weights at the listener. */
+  setEnvironment(gust: number, entrance: number, trail: number, clearing: number): void {
+    const e = this.env;
+    e.gust = gust;
+    e.entrance = entrance;
+    e.trail = trail;
+    e.clearing = clearing;
+  }
+
+  /** Where the Heartstone is and how strongly it hums (0 = silent, 1 = resting, more while held). */
+  setHeart(x: number, y: number, z: number, level: number): void {
+    const h = this.heart;
+    h.x = x;
+    h.y = y;
+    h.z = z;
+    h.level = level;
+  }
+
+  private running(): AudioContext | null {
+    const ctx = this.ctx;
+    return ctx && ctx.state === 'running' && audioInfo.enabled && this.master ? ctx : null;
+  }
+
+  private track(s: AudioBufferSourceNode, ...nodes: AudioNode[]): void {
+    audioInfo.oneShots++;
+    s.onended = () => {
+      audioInfo.oneShots--;
+      try {
+        s.disconnect();
+        for (const n of nodes) n.disconnect();
+      } catch {
+        /* ignore */
+      }
+    };
+  }
+
+  /** One of the player's own footsteps. `side` -1 = left foot, +1 = right; `gain` 0..1 follows the walking speed. */
+  footstep(surface: StepSurface, side: number, gain: number): void {
+    const ctx = this.running();
+    if (!ctx || !this.stepGain) return;
+    if (this.t - this.lastStepAt < 0.16) return; // never a machine-gun of steps, whatever the caller does
+    const b = this.buf(`step-${surface}`);
+    if (!b) return;
+    this.lastStepAt = this.t;
+    const cur = ctx.currentTime;
+    const s = ctx.createBufferSource();
+    s.buffer = b;
+    s.playbackRate.value = 0.9 + this.rng() * 0.2;
+    const g = ctx.createGain();
+    g.gain.value = 0.3 * STEP_LEVEL[surface] * Math.min(1, Math.max(0.2, gain)) * (0.8 + 0.2 * this.rng());
+    s.connect(g);
+    g.connect(this.stepGain);
+    if (this.stepPan) this.stepPan.pan.setValueAtTime(0.14 * Math.sign(side), cur);
+    this.track(s, g);
+    s.start(cur);
+    audioInfo.steps++;
+    audioInfo.lastSurface = surface;
+    audioInfo.stepsBySurface[surface] = (audioInfo.stepsBySurface[surface] ?? 0) + 1;
+  }
+
+  /** Foliage moving at a world position (an animal you do not see, a lizard bolting, your own legs in the ferns). `snap` adds a twig crack. */
+  rustle(x: number, y: number, z: number, gain: number, snap = false): void {
+    const ctx = this.running();
+    if (!ctx || !this.callBus) return;
+    if (this.t - this.lastRustleAt < 0.25) return;
+    const b = this.buf(snap ? 'rustle-snap' : 'rustle') ?? this.buf('rustle');
+    if (!b) return;
+    const cur = ctx.currentTime;
+    // the last two call voices are left for the animals
+    let free = 0;
+    let v: CallVoice | null = null;
+    for (const vv of this.voices)
+      if (vv.busyUntil <= cur) {
+        free++;
+        v ??= vv;
+      }
+    if (!v || free < 3) return;
+    this.lastRustleAt = this.t;
+    const rate = 0.85 + this.rng() * 0.3;
+    v.gain.gain.setValueAtTime(Math.min(1, gain), cur);
+    v.filter.frequency.setValueAtTime(9000, cur);
+    this.setPos(v.panner, x, y, z, cur);
+    const s = ctx.createBufferSource();
+    s.buffer = b;
+    s.playbackRate.value = rate;
+    s.connect(v.filter);
+    v.busyUntil = cur + b.duration / rate + 0.05;
+    this.track(s);
+    s.start(cur);
+    audioInfo.rustles++;
+  }
+
+  /** A far-off roll of thunder from a compass bearing (radians). Soft by design; at most one at a time. */
+  private thunderUntil = 0;
+  thunder(bearing: number, gain: number): void {
+    const ctx = this.running();
+    if (!ctx) return;
+    const b = this.buf('thunder');
+    const cur = ctx.currentTime;
+    if (!b || cur < this.thunderUntil) return;
+    const s = ctx.createBufferSource();
+    s.buffer = b;
+    s.playbackRate.value = 0.9 + this.rng() * 0.2;
+    const g = ctx.createGain();
+    g.gain.value = 0.42 * Math.min(1, gain);
+    // direction only: placed at its reference distance, so the panner pans it but does not attenuate it
+    const p = this.makePanner('equalpower', 400, 1);
+    const L = audioInfo.listener;
+    this.setPos(p, L.x + Math.cos(bearing) * 400, L.y + 120, L.z + Math.sin(bearing) * 400, cur);
+    s.connect(g);
+    g.connect(p);
+    p.connect(this.master!);
+    this.thunderUntil = cur + b.duration / s.playbackRate.value;
+    this.track(s, g, p);
+    s.start(cur);
+    audioInfo.thunders++;
   }
 
   // ------------------------------------------------------------------ opening reveal (IntroSystem)

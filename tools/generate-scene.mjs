@@ -212,7 +212,7 @@ nodes.push({
 // ---- atmosphere ----------------------------------------------------------------------------------
 // Light shafts (one merged mesh) lean along -SUN_DIR and sit in measured canopy gaps; ground mist likewise.
 const shafts = [...P.lightShafts(), ...P.vistaShafts()];
-nodes.push({ id: 'light-shafts', name: 'Light shafts', content: { type: 'asset', asset: 'light-shafts' }, components: { Shimmer: { speed: 0.3, amount: 0.22 } } });
+// (The additive light shafts were removed on user feedback: they read as flat yellow stripes. The 'light-shafts' asset stays registered.)
 nodes.push({ id: 'ground-mists', name: 'Ground mist', content: { type: 'asset', asset: 'ground-mists' } });
 
 // ---- spatial UI + lights -----------------------------------------------------------------------------

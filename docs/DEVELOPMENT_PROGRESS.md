@@ -1,5 +1,68 @@
 # Development progress
 
+## Prompt 09 — The living world: immersion and environmental reactivity
+
+**Not tested on a physical Quest 2. Nobody has listened to any of the new sounds (they are checked numerically). Motion was judged from simulations and a few software-GL stills, not from watching it.** Uncommitted until "push".
+
+### Audit (what existed before, so nothing was duplicated)
+Already there and **reused**: birds / monkeys / butterflies / dragonflies with flee behaviour (`src/wildlife`), the instanced creature rig, plant-sway shaders with 3 player push points, wind + insect + water + call audio with hush, mist cards near the water and light shafts (`AtmosphereSystem`), quality tiers and governor. Missing: footsteps, any ground creature, falling leaves, water reacting to the player, thunder, wind that varies and is shared by sound and plants, pollen/dust, per-area sound, anything hinting at the Heartstone.
+
+### Implemented (new)
+| What | Where | Notes |
+|---|---|---|
+| Shared weather: gusts (every 12-40 s), wind 0.55-1.5x, thin-cloud light 0.93-1.04, far thunder every 2.5-6 min | `src/world/weather.ts` | deterministic, DOM-free. Light changes <= 0.8 %/s, no flash, no darkening; thunder is sound only |
+| Surface under the feet (water, mud, stone, grass, litter, wood, rock) | `src/world/surface.ts` | reads the same layout fields the terrain colours are baked from |
+| Footsteps per surface (7 surfaces x 3 variants), stride from distance walked, alternating feet, none on teleport | `living.ts` `Stride`, `synth.footstep`, `audio.footstep` | |
+| Falling leaves (pool of 14; only under canopy; more in gusts; settle on ground or water, then fade) | `living.ts` `FallingLeaves` | 1 instanced draw |
+| Lizards at the trail edge: bask, dart, flee to cover, hide, creep back (8 placed, pool of 10) | `living.ts` `Lizards` | 1 instanced draw; rustle when they dive into cover |
+| Water rings: when wading, when a leaf lands, and now and then on the pool | `living.ts` `Ripples` | pool of 8, 1 instanced draw |
+| "Something moving beyond the trail": an unseen animal parts the plants 7-13 m off the trail, rustles, the chorus hushes; more often at the entrance; never toward the player | `living.ts` `UnseenMover` | uses a 4th push point in the existing sway shader: no new geometry |
+| Pollen/dust around the player (40) + slow embers circling the Heartstone (14), brighter with its glow | `living.ts` `Motes` | 1 point cloud |
+| Heartstone hum (positional loop inside 42 m), thunder rolls, brush rustle when walking off-trail | `ambient-audio.ts`, `synth.ts` | all synthesised here; no samples |
+| Orchestration | `src/systems/living-world-system.ts` | registered after `WildlifeSystem`; exposes `window.__jumanjiLiving` |
+
+### Modified
+- `ambient-audio.ts`: gust now comes from the shared weather (wind heard = wind seen); leaf-rustle bus that rises with gusts; insects mixed per area (cicadas vs crickets); distant-call species per area; 29 new buffers (55 total); one-shot counter.
+- `scene-assets/lib/materials.ts`: sway shader takes 4 push points instead of 3 (cache key `jungle-plant-sway-v2`).
+- `wildlife-system.ts`: foliage wind follows `weather.wind` (0.4 with reduced motion). `context.ts`: optional `rustle` on the audio sink.
+- `tools/asset-stats.mjs`: wildlife reserve raised to 19.5k tris / 20 draws (jungle), 4 draws (mountain). `package.json`: `npm run living`, added to `verify`.
+
+### Comfort
+No flashes, no sudden darkness, light capped at 0.8 %/s and frozen at 1 with reduced motion; no speck is lit within 0.4 m of the head; the unseen animal never approaches; thunder is distant, soft-onset and never within the first 90 s or twice within 150 s.
+
+### Performance (what is and is not known)
+- Added geometry, worst case: 3,320 triangles, 3 instanced draws (hidden when empty) + 1 point cloud. Computed from the geometry.
+- CPU: 0.13 ms/frame in node for all simulations; 0.23 ms/frame in the real app on desktop software GL. **Not Quest numbers** (expect several times more).
+- No shader compiled after warm-up by the new objects (66 -> 66 programs, desktop).
+- `stats:check` with the larger reserve: worst jungle view 177k tris / 98 draws (budgets 195k / 116); mountain 163k / 88.
+- No allocation in `update()`; all pools fixed-size; audio one-shots return to 0 after a pause (desktop).
+- Frame rate on Quest 2: **unknown**.
+
+### Verification, by level
+- **[auto]** `npm run verify` passes (typecheck, validate, stats, lod, wildlife, living, build). `npm run living`: 46 checks - surfaces at known places, synth buffers (finite, no clipping, deterministic, seamless hum loop), weather over 2 simulated hours, stride, leaves (bounded, never below ground or resting in mid-air), motes, lizards (flee / hide / return), ripples, unseen animal, cost.
+- **[desktop]** `node tools/living-test.mjs --browser` (headless Chromium, software GL): 9 checks pass - objects exist, 55/55 buffers, grass steps on the knoll, water steps + rings in the pool, hum + embers in the clearing, no late shader, one-shots released, no runtime errors.
+- **[XR emulator]** not run for this prompt. **[Quest 2]** never.
+
+### Found along the way
+- Bug fixed during testing: leaves blown up a bank could sink up to 0.25 m into the ground; the ground is now re-sampled while falling.
+- `layout.areaWeights().entrance` is 1 in the deep forest and 0 at the threshold - the opposite of `areaAt()`. Baked placements depend on it, so it was left alone; the living system derives its own threshold band.
+- Two `wildlife-test.mjs --browser` checks fail, **and fail identically on the previous commit** (verified by stashing): the waterfall "far < mid < near" check (mid and near both sit inside the reference distance, 0.850 = 0.850) and one unnamed shader program compiled after warm-up at the jungle stations. Not fixed here; the late program is a possible one-frame hitch in the headset.
+- `stats:check` build-time budget (2.6 s) goes over when the host is busy (2.8 s seen once); it passed inside `verify`.
+
+### Incomplete / limits
+- Wildlife "resting" and "returning" exist for lizards (and the earlier creatures' own flee/return); no new mammals, no creature on the mountain.
+- Foliage does not react to hands, only to the body and the unseen animal. Water has rings but no wake or splash particles.
+- Footsteps follow head movement over the ground (thumbstick or room-scale); there is no foot tracking, so cadence is an estimate.
+- No rain, by design; thunder never comes closer.
+- Low tier: 6 leaves, 6 lizards, 16 pollen.
+
+### Still requires the physical Quest 2
+1. Frame rate at 72 Hz with everything on, both tiers; governor behaviour.
+2. All sound: footstep level against the ambience, whether surfaces are distinguishable, thunder level, whether the Heartstone hum is pleasant or tiring, HRTF direction of the unseen animal.
+3. Whether lizards (about 20 cm) and leaves read at headset resolution, and whether pollen is visible or distracting in stereo.
+4. Comfort of the light variation and of gust-driven sway.
+5. Whether the footstep cadence feels right with thumbstick locomotion.
+
 ## Hilltop start with a waterfall vista + graphics upgrade
 Date: 2026-11-09. Request: "enhance graphics, polish them, make the spawning start point a wonderful point on a hill with a view of a waterfall, make it unbelievably immersive". **Nothing here was run on a physical Quest 2.** Screenshots: `docs/screenshots/hill-start-waterfall-view.png`, `hill-start-looking-right.png` (desktop software GL, eye height at the spawn).
 **How it was designed:** a design workflow (3 independent landform concepts judged by a 3-lens panel, 6 graphics specialists, a prioritiser) chose "Overlook Knoll": a hill with a cleared sightline to the existing backdrop waterfall (the judges rejected a brand-new closer fall as too large a build and a mountain-regime vista as too costly). A second workflow implemented six file-owned groups in parallel (developer -> 2 adversarial reviewers -> fixer); the landform and the integration were done by hand.
@@ -542,3 +605,62 @@ blockout, locomotion + snap turn, grab with settle behaviour (`RelicSystem`), ex
 runtime WebXR feature detection, desktop WASD + right-drag look, render-scale/foveation settings and telemetry.
 Emulator results then: walking 2.5 m/s, wall/trunk/altar collision, 30° snap turn both ways, squeeze and pinch grab,
 release settles on altar/ground, ray click on the board.
+
+## Amazon restyle of the jungle (2026-11-10, uncommitted)
+
+Request: "Make the forest inspired by an Amazon tropical forest". Species and palette only; placements, colliders, perches, scene JSON and fog are unchanged (no scene regeneration).
+
+- **Trees** (`trees.scene-asset.ts`, new optional `TreeSpec` traits `plank`, `buttH`, `pale`, `ringed`, `flat`, `crownTile`, `epiphytes`, `aerial`):
+  giant 0 = samauma/kapok (plank buttresses, pale bole, flat parasol crown); giant 1 = Brazil nut (bare dark column, domed crown);
+  giant 2 = strangler fig (aerial prop roots, most lianas and bromeliads); tall 1 = pale rubber tree; slender = embauba/Cecropia
+  (pale ringed pole, new `palmate` leaf-atlas tile, index 13). Bromeliads (hi detail only) on trunks and on the inner third of perch boughs
+  (perch spots at t >= 0.52 stay clear). Footprint at ground level is the same as before (`treeFootprint` unchanged in value).
+- **Plants** (`plants.scene-asset.ts`): palm 0 = walking palm with stilt roots; heliconia gets hanging red/yellow bracts; pads = Victoria amazonica
+  (one 0.46 m-radius rimmed pad per placement, slightly tilted so touching pads are not coplanar). Other palms/broadleafs renamed to Amazon natives.
+- **Palette**: deeper, more saturated greens; `PAL.heliconia` red. **Water**: tea-dark blackwater tint on the jungle pool/stream only.
+- **Budgets after**: 525,610 tris total (was 505,604), jungle view 188,329 / 195,000, mountain view 167,382 / 170,000 (tight), materials 16/16.
+- **Verified**: `npm run verify` passes (typecheck, validate, stats, lod, wildlife 41/41, living, build). Desktop stills in `reports/evidence/amazon/`.
+- **Not done / not verified**: no Quest 2 test; pads are small for Victoria (pool is 6 m wide, nine baked placements as close as 0.6 m); no pad flower
+  (`PLANT_VARIANTS.pads` is 1; a second variant needs scene regeneration); no Amazon audio (howler, piha); close-up stills of kapok buttresses,
+  bromeliads and heliconia bracts were not taken.
+
+## Phone (touch) play mode — 2026-11-10
+
+- New `src/systems/touch-controls-system.ts` (registered after `DesktopLookSystem`). On a touch device in the flat page: bottom-left virtual stick walks (it presses W/A/S/D as synthetic key events on `window`, so IWSDK browser locomotion and collision are reused; 8 directions, no analog speed), dragging anywhere else on the picture looks, "Full screen" button also requests landscape. Hidden and inert inside an XR session. `?touch=1` / `?touch=0` force it on/off.
+- `index.html` viewport blocks pinch-zoom; board status shows "Phone mode".
+- Tested only in headless Chromium with emulated touch (851x393): look drag turned the camera, stick walked the rig ~14 m and stopped on release, no console errors. Still: `reports/evidence/touch-phone.jpg`.
+- Not tested: a real Android phone (frame rate, browser bars, orientation lock), tapping the 3D board by touch. Relic grab has no touch path (XR controllers/hands only).
+
+## Summit panorama rework (video reference, 2026-11-11, uncommitted)
+
+Goal: bring the summit lookout closer to the reference clip (waterfall, mesas, layered ranges, haze, clouds).
+
+- `background.scene-asset.ts`: far ranges rebuilt as 3 rings (380/470/580 m) with baked sun/shade colour and haze feet; 6 tepui mesas (`TEPUIS`) with one thin fall each; still one mesh, `silhouetteMaterial`.
+- `atmosphere-system.ts`: mountain fog 0.0036 -> 0.0016, haze colour `#b2c4cf`, bluer open sky.
+- `sky-system.ts` / `sky.scene-asset.ts`: the cloud/sun pack now also shows on the mountain (scaled with the far plane), 30 cloud banks all round. `tools/asset-stats.mjs` counts it for mountain views.
+- `falls.scene-asset.ts`: main sheet fans out to ~10 m, two extra threads, taller spray plume, six warm mist banks over the valley canopy, a spray-bow (rainbow arc) facing the lookout - all in the existing `fall-mist` mesh, no new material.
+- `mountain-placements.ts`: wide tree-free cone in front of the lookout; valley emergents shortened (scale 1.02-1.24) so no bare trunks cross the horizon.
+- `npm run verify` passes (asset build time reads over budget on this loaded host, as before).
+- Checked only in headless desktop stills from the summit (`?area=summit`). The mist banks and the rainbow were NOT confirmed visually (the summit's own slope hides most of the valley floor in the stills). No Quest or phone test.
+- Not done: summit foreground dressing (boulders, bromeliads), river glint, birds over the valley, starting the player on the summit (spawn is still the knoll; use `?area=summit`).
+
+## Video textures, blue sky, sun shafts removed (2026-11-11)
+
+**Textures from the reference video.** Five 256 px surface patches were cut from frames of the user's summit clip (boulder, cliff wall, ledge
+stone, canopy, mossy ground), made seamless, lighting-flattened, normalised to a mean of ~0.8 and stored as 64-colour palette + indices in
+`src/scene-assets/lib/photo-textures-data.ts` (generated, 439 KB); `lib/photo-textures.ts` decodes them to `DataTexture`s (DOM-free, cached per
+realm). They MULTIPLY the baked vertex colours in the existing materials (no new manifest material): jungle ground (`moss`, now projected in
+world space so tiles and trail line up), mountain ground (`ledge` on top, `cliff` on steep faces at 8 m and 57 m), mountain canopy (`canopy`,
+world-space), rocks (`rock`). The large-scale ground sample uses a mip bias so photo cracks are not magnified. Bark and ruin stone keep the
+procedural grain.
+
+**Sky.** The dome is clear blue everywhere (jungle included; it was teal-green under the canopy), the fog/horizon haze is pale blue
+(`#b3cbd8`), clouds are white and denser, and the sky pack (clouds, sun) is now drawn in the jungle as well (+2 draws, counted in every
+budget view). The yellow horizon glow became a pale haze.
+
+**Removed.** The additive light shafts ("yellow sun rays") are no longer placed in the scene (the asset stays registered). Far mesas were
+recoloured from orange/violet to sandstone/blue-grey.
+
+**Verification.** typecheck, validate, lod, living, build pass; stats budgets pass except the host-dependent "asset build time" check
+(5.8 s on a loaded machine); wildlife passed on the second run (its CPU-spike check failed once on the loaded host). Desktop software-GL
+stills only; not tested on a Quest or phone. The thick dark lines on the mountain ledge are the collapse shelf's crack marks (intended).

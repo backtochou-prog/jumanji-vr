@@ -4,15 +4,15 @@
  "components": {
   "com.iwsdk.components.DomeGradient": {
    "sky": [
-    0.22,
-    0.46,
-    0.84,
+    0.2,
+    0.47,
+    0.88,
     1
    ],
    "equator": [
-    0.74,
-    0.79,
-    0.72,
+    0.7,
+    0.8,
+    0.85,
     1
    ],
    "ground": [
@@ -54,7 +54,7 @@
   "shadowMapType": "pcf",
   "fog": {
    "type": "exponential",
-   "color": "#a9c4b3",
+   "color": "#b3cbd8",
    "density": 0.0095
   }
  },

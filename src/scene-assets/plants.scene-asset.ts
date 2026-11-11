@@ -12,7 +12,7 @@
  *   ground cover clover mat, grass tuft, mixed; flowers (the warm accent); moss; litter
  *   water plants reeds, floating pads
  */
-import { BufferGeometry, Color, Float32BufferAttribute, Mesh, Uint8BufferAttribute, Vector3 } from '@iwsdk/core';
+import { BufferGeometry, CircleGeometry, Color, CylinderGeometry, Float32BufferAttribute, Mesh, Uint8BufferAttribute, Vector3 } from '@iwsdk/core';
 import { makeRandom } from '../world/layout.js';
 import { MEADOW, PAL } from '../world/palette.js';
 import { cardGeometry, lerpColor, mat, mergeBaked, mergeParts, softNormals, solidUV, tubeAlong } from './lib/geo.js';
@@ -96,16 +96,24 @@ export function createPalm(variant: number): Mesh {
   const lo = new Color(PAL.leafShade).lerp(new Color(PAL.leafMid), 0.35);
   const hi = new Color(PAL.leafLight).lerp(new Color(PAL.leafSun), 0.25);
   if (variant === 0) {
-    // Arching coconut-type: tall leaning trunk, long drooping pinnate fronds.
-    const t = ringedTrunk(rng, 8.5, 1.4, 0.15);
+    // Walking palm (paxiuba, Socratea exorrhiza): a slim tall stem standing on a cone of stilt roots, long drooping pinnate fronds.
+    const t = ringedTrunk(rng, 8.5, 1.4, 0.13);
     parts.push({ geo: t.geo, color: ringColor });
+    for (let i = 0; i < 9; i++) {
+      const a = i * GOLDEN;
+      const reach = 0.42 + 0.3 * rng();
+      const top = new Vector3(0.03, 1.15 + 0.5 * rng(), 0);
+      const foot = new Vector3(Math.cos(a) * reach, -0.12, Math.sin(a) * reach);
+      const knee = top.clone().lerp(foot, 0.45).add(new Vector3(Math.cos(a) * 0.08, 0.1, Math.sin(a) * 0.08));
+      parts.push({ geo: solidUV(tubeAlong([top, knee, foot], () => 0.028, 4, 2)), color: (p) => lerpColor('#3d3024', '#6a5a44', Math.min(1, Math.max(0, p.y / 1.4))) });
+    }
     for (let i = 0; i < 15; i++) {
       const L = 3.4 + rng() * 0.9;
       const tilt = 0.5 + 0.9 * (i / 15) + (rng() - 0.5) * 0.15;
       parts.push({ geo: cardGeometry('palm', L, L * 0.34, 1.5 + 0.9 * (i / 15), 5), m: mat(t.top.x, t.top.y, t.top.z, tilt, i * GOLDEN + rng() * 0.2, 0), normalFn: softNormals(t.top.clone().add(new Vector3(0, -0.8, 0)), 0.6), color: baseToTip(L, lo, hi, t.top.y - 0.3) });
     }
   } else if (variant === 1) {
-    // Fan palm: short stout trunk, big rounded crown of wide fronds.
+    // Buriti-type fan palm (Mauritia): short stout trunk, big rounded crown of wide fronds.
     const t = ringedTrunk(rng, 3.6, 0.4, 0.2);
     parts.push({ geo: t.geo, color: ringColor });
     for (let i = 0; i < 18; i++) {
@@ -114,7 +122,7 @@ export function createPalm(variant: number): Mesh {
       parts.push({ geo: cardGeometry('frond2', L, L * 0.62, 0.8 + 0.6 * (i / 18), 3), m: mat(t.top.x, t.top.y, t.top.z, tilt, i * GOLDEN, 0), normalFn: softNormals(t.top, 0.55), color: baseToTip(L, lo, hi, t.top.y - 0.3) });
     }
   } else if (variant === 2) {
-    // Clustered slender palm (areca-type): three stems of different height.
+    // Acai (Euterpe oleracea): a clump of three slender stems of different height with feathery crowns.
     for (let s = 0; s < 3; s++) {
       const h = 4.2 + s * 1.3 + rng();
       const t = ringedTrunk(rng, h, (s - 1) * 0.55, 0.075);
@@ -126,7 +134,7 @@ export function createPalm(variant: number): Mesh {
       }
     }
   } else {
-    // Sago-type: no trunk to speak of, stiff upright fronds in a tight crown.
+    // Stemless understory palm (ubim / Geonoma-type): no trunk to speak of, stiff fronds in a tight crown.
     const crown = new Vector3(0, 0.35, 0);
     parts.push({ geo: solidUV(tubeAlong([new Vector3(0, -0.1, 0), new Vector3(0, 0.35, 0)], () => 0.14, 6, 2)), color: () => new Color('#4b3b2a') });
     for (let i = 0; i < 22; i++) {
@@ -142,7 +150,7 @@ export function createPalm(variant: number): Mesh {
 // Broad-leaf plants
 // ---------------------------------------------------------------------------
 
-/** 0 heliconia-type (upright paddle leaves), 1 banana-type (tall arching), 2 alocasia-type (heart leaves). */
+/** 0 heliconia (paddle leaves + hanging red lobster-claw bracts), 1 sororoca / wild banana (Phenakospermum, tall arching), 2 philodendron / taioba (heart leaves). */
 export function createBroadleaf(variant: number): Mesh {
   const rng = makeRandom(800 + variant * 13);
   const parts: Part[] = [];
@@ -165,6 +173,22 @@ export function createBroadleaf(variant: number): Mesh {
     const bm = base.clone().multiply(mat(0, stalkLen, stalkLen * 0.08, 0.15, 0, 0));
     parts.push({ geo: cardGeometry(species.tile, L, species.W * (L / species.L), species.bend, 3), m: bm, normalFn: softNormals(centre, 0.6), color: baseToTip(L, lo, hi.clone().lerp(new Color(PAL.leafSun), rng() * 0.35)) });
     void tip;
+  }
+  if (variant % 3 === 0) {
+    // Heliconia rostrata: pendant chains of red, yellow-tipped bracts ("lobster claws"), the understory's signal colour.
+    const red = new Color(PAL.heliconia);
+    const tipC = new Color(PAL.accent).lerp(new Color('#f2d04a'), 0.5);
+    for (let k = 0; k < 2; k++) {
+      const yaw = 0.9 + k * 2.7;
+      const out = new Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+      const top = new Vector3(0, 1.25 + 0.2 * k, 0).addScaledVector(out, 0.32);
+      parts.push({ geo: solidUV(tubeAlong([new Vector3(0, 0.1, 0), new Vector3(0, 1.0, 0).addScaledVector(out, 0.1), top, top.clone().add(new Vector3(0, -0.75, 0)).addScaledVector(out, 0.1)], () => 0.014, 3, 5)), color: () => lerpColor('#5a7640', PAL.heliconia, 0.5) });
+      for (let j = 0; j < 6; j++) {
+        const side = j % 2 ? 1 : -1;
+        const L = 0.2 - j * 0.012;
+        parts.push({ geo: cardGeometry('broad', L, L * 0.45, 0.25, 1), m: mat(top.x + out.x * 0.02 * j, top.y - 0.1 - j * 0.11, top.z + out.z * 0.02 * j, side * 2.0, yaw + Math.PI / 2, 0), color: baseToTip(L, red, tipC) });
+      }
+    }
   }
   return finish(parts, `Broadleaf_${variant}`);
 }
@@ -274,15 +298,35 @@ export function createReed(variant: number): Mesh {
 }
 
 /** Floating leaf pads: low, flat, slightly different greens. */
+/**
+ * Victoria amazonica (vitoria-regia): giant round lily pads with an upturned rim, green and ribbed above, wine-red on the rim's outer wall.
+ */
 export function createPads(variant: number): Mesh {
   const rng = makeRandom(1500 + variant);
   const parts: Part[] = [];
   const up = new Vector3(0, 1, 0);
-  for (let i = 0; i < 4; i++) {
-    const s = 0.5 + rng() * 0.3;
-    const a = i * GOLDEN;
-    parts.push({ geo: cardGeometry('moss', s, s, 0, 1), m: mat(Math.cos(a) * 0.45, 0, Math.sin(a) * 0.45, -Math.PI / 2, rng() * 6.28, 0).multiply(mat(0, -s / 2, 0)), normalFn: () => up.clone(), color: () => lerpColor(PAL.leafMid, PAL.leafSun, 0.2 + 0.4 * rng()) });
-  }
+  const top = new Color(PAL.leafMid).lerp(new Color(PAL.leafLight), 0.55);
+  const rib = new Color(PAL.leafSun);
+  const wine = new Color('#6e2f33');
+  const pad = (cx: number, cz: number, r: number, tilt: number) => {
+    const phase = rng() * 6.28;
+    const disc = new CircleGeometry(r, 18).rotateX(-Math.PI / 2).rotateZ(tilt).translate(cx, 0.004, cz);
+    parts.push({
+      geo: solidUV(disc),
+      normalFn: () => up.clone(),
+      color: (p) => {
+        const d = Math.hypot(p.x - cx, p.z - cz) / r;
+        const a = Math.atan2(p.z - cz, p.x - cx);
+        return top.clone().lerp(rib, 0.35 * Math.pow(Math.abs(Math.cos(a * 4.5 + phase)), 6) * d).multiplyScalar(0.82 + 0.18 * d);
+      },
+    });
+    const rimH = 0.05 + r * 0.05;
+    const rim = new CylinderGeometry(r * 1.03, r, rimH, 18, 1, true).translate(0, rimH / 2, 0).rotateZ(tilt).translate(cx, 0.004, cz);
+    parts.push({ geo: solidUV(rim), color: (p) => wine.clone().lerp(top, Math.min(1, Math.max(0, p.y / rimH)) * 0.45) });
+  };
+  // One pad per placement (the pool holds nine, some touching). A slight tilt, turned by each placement's yaw, keeps touching pads from being
+  // coplanar (no depth fighting where two overlap).
+  pad(0, 0, 0.46, 0.014);
   return finish(parts, `Pads_${variant}`);
 }
 

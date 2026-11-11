@@ -46,6 +46,7 @@ npm run dev     # https://localhost:8081 + the IWSDK managed browser (emulated Q
 | `node tools/relief.mjs` | Plan-view shaded relief of the height model with the route overlaid (PNG in `perf-results/`) |
 | `node tools/shot.mjs --views summit,brink` | Stills of named stations from the real scene (needs `npm run dev:runtime`) |
 | `npm run wildlife` / `npm run wildlife:browser` | Wildlife verification: 41 headless checks (synthesis, perch fit, 72 Hz simulation) / 15 desktop-browser checks (audio unlock, positional audio, draw calls, plant reaction); `tools/wildlife-shots.mjs` takes stills of the creatures |
+| `npm run living` / `node tools/living-test.mjs --browser` | Living-world verification (Prompt 09): 46 headless checks (surfaces, footstep/thunder/hum synthesis, weather, leaves, lizards, ripples, unseen animal) / 9 desktop-browser checks |
 | `node tools/scale-audit.mjs` | Real-world size table of every prototype + camera/fog/speed facts |
 | `node tools/flicker-test.mjs --label x` / `zfight-scan.mjs` / `shadow-walk.mjs` | Structure-flicker diagnosis: depth stability, far-plane clipping, coplanar surfaces, shadow stability |
 | `node tools/eye-shots.mjs --out artifacts/scale/x --figure 1` / `visible-report.mjs` | Eye-height stills with a 1.8 m reference figure / what is really drawn from a viewpoint |

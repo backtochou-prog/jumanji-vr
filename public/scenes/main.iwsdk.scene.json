@@ -4,15 +4,15 @@
  "components": {
   "com.iwsdk.components.DomeGradient": {
    "sky": [
-    0.22,
-    0.46,
-    0.84,
+    0.2,
+    0.47,
+    0.88,
     1
    ],
    "equator": [
-    0.74,
-    0.79,
-    0.72,
+    0.7,
+    0.8,
+    0.85,
     1
    ],
    "ground": [
@@ -54,7 +54,7 @@
   "shadowMapType": "pcf",
   "fog": {
    "type": "exponential",
-   "color": "#a9c4b3",
+   "color": "#b3cbd8",
    "density": 0.0095
   }
  },
@@ -977,6 +977,15 @@
    "framingRole": "support"
   },
   {
+   "id": "veg-deadwood-3-7",
+   "name": "veg deadwood 3 7",
+   "content": {
+    "type": "asset",
+    "asset": "veg-deadwood-3-7"
+   },
+   "framingRole": "support"
+  },
+  {
    "id": "veg-deadwood-3-8",
    "name": "veg deadwood 3 8",
    "content": {
@@ -1013,20 +1022,11 @@
    "framingRole": "support"
   },
   {
-   "id": "veg-deadwood-5-5",
-   "name": "veg deadwood 5 5",
+   "id": "veg-deadwood-4-9",
+   "name": "veg deadwood 4 9",
    "content": {
     "type": "asset",
-    "asset": "veg-deadwood-5-5"
-   },
-   "framingRole": "support"
-  },
-  {
-   "id": "veg-deadwood-5-6",
-   "name": "veg deadwood 5 6",
-   "content": {
-    "type": "asset",
-    "asset": "veg-deadwood-5-6"
+    "asset": "veg-deadwood-4-9"
    },
    "framingRole": "support"
   },
@@ -1049,20 +1049,11 @@
    "framingRole": "support"
   },
   {
-   "id": "veg-deadwood-5-9",
-   "name": "veg deadwood 5 9",
+   "id": "veg-deadwood-6-4",
+   "name": "veg deadwood 6 4",
    "content": {
     "type": "asset",
-    "asset": "veg-deadwood-5-9"
-   },
-   "framingRole": "support"
-  },
-  {
-   "id": "veg-deadwood-6-5",
-   "name": "veg deadwood 6 5",
-   "content": {
-    "type": "asset",
-    "asset": "veg-deadwood-6-5"
+    "asset": "veg-deadwood-6-4"
    },
    "framingRole": "support"
   },
@@ -1832,6 +1823,15 @@
    "framingRole": "support"
   },
   {
+   "id": "veg-rocks-4-9",
+   "name": "veg rocks 4 9",
+   "content": {
+    "type": "asset",
+    "asset": "veg-rocks-4-9"
+   },
+   "framingRole": "support"
+  },
+  {
    "id": "veg-rocks-5-5",
    "name": "veg rocks 5 5",
    "content": {
@@ -1936,15 +1936,6 @@
    "content": {
     "type": "asset",
     "asset": "veg-rocks-8-3"
-   },
-   "framingRole": "support"
-  },
-  {
-   "id": "veg-rocks-8-4",
-   "name": "veg rocks 8 4",
-   "content": {
-    "type": "asset",
-    "asset": "veg-rocks-8-4"
    },
    "framingRole": "support"
   },
@@ -2066,29 +2057,11 @@
    "framingRole": "support"
   },
   {
-   "id": "veg-trees-far-3-2",
-   "name": "veg trees-far 3 2",
-   "content": {
-    "type": "asset",
-    "asset": "veg-trees-far-3-2"
-   },
-   "framingRole": "support"
-  },
-  {
    "id": "veg-trees-far-3-3",
    "name": "veg trees-far 3 3",
    "content": {
     "type": "asset",
     "asset": "veg-trees-far-3-3"
-   },
-   "framingRole": "support"
-  },
-  {
-   "id": "veg-trees-far-3-4",
-   "name": "veg trees-far 3 4",
-   "content": {
-    "type": "asset",
-    "asset": "veg-trees-far-3-4"
    },
    "framingRole": "support"
   },
@@ -2170,6 +2143,15 @@
    "content": {
     "type": "asset",
     "asset": "veg-trees-hi-1-8"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-10-3",
+   "name": "veg trees-hi 10 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-10-3"
    },
    "framingRole": "support"
   },
@@ -2273,6 +2255,24 @@
    "framingRole": "support"
   },
   {
+   "id": "veg-trees-hi-4-9",
+   "name": "veg trees-hi 4 9",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-4-9"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-hi-5-6",
+   "name": "veg trees-hi 5 6",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-hi-5-6"
+   },
+   "framingRole": "support"
+  },
+  {
    "id": "veg-trees-hi-5-7",
    "name": "veg trees-hi 5 7",
    "content": {
@@ -2291,20 +2291,11 @@
    "framingRole": "support"
   },
   {
-   "id": "veg-trees-hi-5-9",
-   "name": "veg trees-hi 5 9",
+   "id": "veg-trees-hi-6-4",
+   "name": "veg trees-hi 6 4",
    "content": {
     "type": "asset",
-    "asset": "veg-trees-hi-5-9"
-   },
-   "framingRole": "support"
-  },
-  {
-   "id": "veg-trees-hi-6-5",
-   "name": "veg trees-hi 6 5",
-   "content": {
-    "type": "asset",
-    "asset": "veg-trees-hi-6-5"
+    "asset": "veg-trees-hi-6-4"
    },
    "framingRole": "support"
   },
@@ -2377,6 +2368,15 @@
    "content": {
     "type": "asset",
     "asset": "veg-trees-lo-1-8"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-10-3",
+   "name": "veg trees-lo 10 3",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-10-3"
    },
    "framingRole": "support"
   },
@@ -2480,6 +2480,24 @@
    "framingRole": "support"
   },
   {
+   "id": "veg-trees-lo-4-9",
+   "name": "veg trees-lo 4 9",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-4-9"
+   },
+   "framingRole": "support"
+  },
+  {
+   "id": "veg-trees-lo-5-6",
+   "name": "veg trees-lo 5 6",
+   "content": {
+    "type": "asset",
+    "asset": "veg-trees-lo-5-6"
+   },
+   "framingRole": "support"
+  },
+  {
    "id": "veg-trees-lo-5-7",
    "name": "veg trees-lo 5 7",
    "content": {
@@ -2498,20 +2516,11 @@
    "framingRole": "support"
   },
   {
-   "id": "veg-trees-lo-5-9",
-   "name": "veg trees-lo 5 9",
+   "id": "veg-trees-lo-6-4",
+   "name": "veg trees-lo 6 4",
    "content": {
     "type": "asset",
-    "asset": "veg-trees-lo-5-9"
-   },
-   "framingRole": "support"
-  },
-  {
-   "id": "veg-trees-lo-6-5",
-   "name": "veg trees-lo 6 5",
-   "content": {
-    "type": "asset",
-    "asset": "veg-trees-lo-6-5"
+    "asset": "veg-trees-lo-6-4"
    },
    "framingRole": "support"
   },
@@ -2684,20 +2693,6 @@
      "restOffset": 0.03
     },
     "OneHandGrabbable": {}
-   }
-  },
-  {
-   "id": "light-shafts",
-   "name": "Light shafts",
-   "content": {
-    "type": "asset",
-    "asset": "light-shafts"
-   },
-   "components": {
-    "Shimmer": {
-     "speed": 0.3,
-     "amount": 0.22
-    }
    }
   },
   {

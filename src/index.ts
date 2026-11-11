@@ -8,9 +8,11 @@ import { World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { PanelSystem } from './panel.js';
 import { DesktopLookSystem } from './systems/desktop-look-system.js';
+import { TouchControlsSystem } from './systems/touch-controls-system.js';
 import { metrics } from './diagnostics/frame-metrics.js';
 import { PerfOverlaySystem } from './diagnostics/perf-overlay.js';
 import { PerfTestSystem } from './diagnostics/perf-test.js';
+import { LivingWorldSystem } from './systems/living-world-system.js';
 import { applyQuality, applyTier, loadTier, warmShaders } from './settings/quality.js';
 import { AtmosphereSystem } from './systems/atmosphere-system.js';
 import { SkySystem } from './systems/sky-system.js';
@@ -37,6 +39,7 @@ World.create(document.getElementById('scene-container') as HTMLDivElement, proje
   world.registerSystem(SkySystem);
   world.registerSystem(ChunkLodSystem);
   world.registerSystem(WildlifeSystem);
+  world.registerSystem(LivingWorldSystem);
   world.registerSystem(IntroSystem);
   world.registerSystem(ReactiveFoliageSystem);
   world.registerSystem(CollapseSystem);
@@ -49,6 +52,7 @@ World.create(document.getElementById('scene-container') as HTMLDivElement, proje
   world.registerSystem(WaterSystem);
   world.registerSystem(ShimmerSystem);
   world.registerSystem(DesktopLookSystem);
+  world.registerSystem(TouchControlsSystem);
   world.registerSystem(PanelSystem);
   world.registerSystem(PerfTestSystem);
   world.registerSystem(PerfOverlaySystem);

@@ -13,11 +13,11 @@
 
 export const PAL = {
   // Foliage (value ramp from sunlit to deep shade)
-  leafSun: '#9bb43f',
-  leafLight: '#6f9a34',
-  leafMid: '#4a7a2c',
-  leafShade: '#2d5428',
-  leafDeep: '#1a3a25',
+  leafSun: '#93b43c',
+  leafLight: '#5f9634',
+  leafMid: '#3f7430',
+  leafShade: '#234d27',
+  leafDeep: '#12331f',
   leafDry: '#a19340',
   leafDead: '#7a5a30',
 
@@ -53,6 +53,7 @@ export const PAL = {
 
   // The single warm accent
   accent: '#e48a2e',
+  heliconia: '#d8452a', // Amazon reds: heliconia bracts, bromeliad hearts (used sparingly, like the accent)
   accentPale: '#f0c872',
 
   // Water
@@ -129,8 +130,8 @@ export const LIGHT_PRESETS = {
     iblEquator: [0.46, 0.42, 0.32],
     iblGround: [0.1, 0.13, 0.07],
     iblIntensity: 0.76,
-    domeSky: [0.22, 0.46, 0.84],
-    domeEquator: [0.74, 0.79, 0.72],
+    domeSky: [0.2, 0.47, 0.88],
+    domeEquator: [0.7, 0.8, 0.85],
     domeGround: [0.17, 0.23, 0.15],
     domeAzimuthDeg: -100,
     exposure: 1.05,
@@ -178,7 +179,7 @@ export const SUN_ELEVATION_DEG = (Math.asin(SUN_TO[1]) * 180) / Math.PI;
 export const SUN_COLOR: readonly [number, number, number] = LIGHT.sunColor;
 
 /** Scene fog / horizon tint (hex). The scene generator writes it into the environment; ridges fade to it. */
-export const FOG_COLOR = '#a9c4b3';
+export const FOG_COLOR = '#b3cbd8';
 
 /**
  * MEADOW: the sunlit upland meadow on Overlook Knoll (terrain splat, wind-swept tufts, wildflower drifts, sandstone monoliths).

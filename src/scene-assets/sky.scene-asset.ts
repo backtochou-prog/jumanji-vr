@@ -59,12 +59,12 @@ class Buf {
 // Clouds
 // ---------------------------------------------------------------------------
 
-const CLOUD_BANKS = 20;
+const CLOUD_BANKS = 30;
 const PUFF_SEGMENTS = 10;
-const C_LIT = new Color('#fff0d4'); // sun-facing tops: warm cream
-const C_MID = new Color('#e6e8e6');
-const C_SHADE = new Color('#8da1b8'); // underside: blue-grey
-const C_HAZE = new Color('#dfe4d8'); // horizon-ward clouds dissolve toward the haze colour
+const C_LIT = new Color('#ffffff'); // sun-facing tops: white
+const C_MID = new Color('#eef2f7');
+const C_SHADE = new Color('#a7b8cd'); // underside: blue-grey
+const C_HAZE = new Color('#dde8f0'); // horizon-ward clouds dissolve toward the haze colour
 
 export function createSkyClouds(): BufferGeometry {
   const rng = makeRandom(7301);
@@ -84,14 +84,14 @@ export function createSkyClouds(): BufferGeometry {
   const centres: V3[] = [];
   const puffs: Puff[] = [];
   for (let k = 0; k < CLOUD_BANKS; k++) {
-    // --- where: forward sector 62 %, elsewhere 38 %; 14..64 deg up; clear of the sun and of the earlier banks
+    // --- where: forward sector 42 % (+ its share of the rest), all round otherwise (the summit panorama is turned through 360 deg); 11..64 deg up; clear of the sun and of the earlier banks
     let az = 0;
     let el = 0;
     let W = 0;
     let c: V3 = [0, 1, 0];
     for (let tries = 0; tries < 12; tries++) {
-      az = (rng() < 0.62 ? (rng() * 2 - 1) * 78 : (rng() * 2 - 1) * 180) * DEG;
-      el = (15 + 49 * Math.pow(rng(), 1.15)) * DEG;
+      az = (rng() < 0.42 ? (rng() * 2 - 1) * 78 : (rng() * 2 - 1) * 180) * DEG;
+      el = (11 + 53 * Math.pow(rng(), 1.3)) * DEG;
       W = (0.36 + 0.34 * rng()) * (1.3 - 0.7 * smoothstep(14, 60, el / DEG)); // low banks are wide and flat, high ones small
       c = dirOf(az, el);
       const clearSun = angleBetween(c, sun) > 0.42 + W * 0.55;
@@ -124,7 +124,7 @@ export function createSkyClouds(): BufferGeometry {
       const lit = base ? 0.05 : Math.min(1, Math.max(0, 0.32 + 0.5 * yRel + 0.3 * side + 0.25 * nearSun));
       // aerial perspective: clouds near the horizon are fainter
       const haze = smoothstep(14, 38, (Math.asin(dir[1]) / DEG));
-      puffs.push({ c: dir, e1, e2, rx, ry, lit, a: (0.5 + 0.28 * rng()) * (0.6 + 0.4 * haze), yRel, rot: (rng() - 0.5) * 0.35 });
+      puffs.push({ c: dir, e1, e2, rx, ry, lit, a: (0.78 + 0.2 * rng()) * (0.7 + 0.3 * haze), yRel, rot: (rng() - 0.5) * 0.35 });
     }
   }
   // painter order: lowest (shaded) puffs first, tops last, so the lit tops overlap the shaded bellies
@@ -161,16 +161,16 @@ const HAZE_COLS = 72;
 const HAZE_ROWS_DEG = [2, 10, 36]; // faint at the bottom (the ridges hide it), brightest at 10 deg, gone at 36 deg
 const SUN_RINGS: { r: number; a: number; c: Color }[] = [
   { r: 1.7, a: 1.0, c: new Color('#fff6dc') }, // the disc, opaque
-  { r: 2.2, a: 0.62, c: new Color('#ffe7b0') }, // bright rim of the halo
-  { r: 6.0, a: 0.26, c: new Color('#ffd89a') },
-  { r: 15.0, a: 0.07, c: new Color('#ffd08a') },
-  { r: 26.0, a: 0, c: new Color('#ffd08a') },
+  { r: 2.2, a: 0.62, c: new Color('#fff6e0') }, // bright rim of the halo
+  { r: 6.0, a: 0.2, c: new Color('#fff3da') },
+  { r: 15.0, a: 0.05, c: new Color('#f4f3ea') },
+  { r: 26.0, a: 0, c: new Color('#f4f3ea') },
 ];
 const SUN_SEGMENTS = 16;
 
 export function createSkyGlow(): BufferGeometry {
   const b = new Buf();
-  const warm = new Color('#ffdca0');
+  const warm = new Color('#eef4fa'); // pale horizon haze (was a yellow glow)
   // --- haze: a ring band; strongest in the sun's direction, a faint level all round
   const rowIdx: number[][] = [];
   HAZE_ROWS_DEG.forEach((deg, r) => {

@@ -8,7 +8,7 @@
  * 'hi' (near the trail) and 'lo' (distant wall) detail. Variants differ in
  * buttress count, lean, branching height and crown shape, not just size.
  */
-import { BufferGeometry, CatmullRomCurve3, Color, Float32BufferAttribute, Mesh, Vector3 } from '@iwsdk/core';
+import { BufferGeometry, CatmullRomCurve3, Color, Float32BufferAttribute, Matrix4, Mesh, Vector3 } from '@iwsdk/core';
 import { ENTRANCE_LIMB, ENTRANCE_TREES, ROOT_ARCH, fbm, makeRandom, smoothstep, terrainHeight } from '../world/layout.js';
 import { PAL } from '../world/palette.js';
 import type { TreeKind } from '../world/placements.js';
@@ -29,6 +29,23 @@ export interface TreeSpec {
   vines: number; // climbing lianas on the trunk
   hanging: number; // hanging lianas from limbs
   tone: number; // 0 = deep green .. 1 = yellower
+  // --- Amazon species traits (all optional) ---
+  /** Plank buttresses (kapok/samauma): thin tall fins instead of rounded lobes. */
+  plank?: boolean;
+  /** Buttress height factor (1 = fades by ~5 m). */
+  buttH?: number;
+  /** 0..1 pale, smooth grey bark (kapok, rubber tree, cecropia). */
+  pale?: number;
+  /** Ringed trunk (cecropia leaf scars). */
+  ringed?: boolean;
+  /** 0..1 flattened umbrella crown (emergents spread a wide, shallow parasol above the canopy). */
+  flat?: number;
+  /** Crown card tile ('clump' by default; 'palmate' = cecropia whorls). */
+  crownTile?: 'clump' | 'palmate';
+  /** Bromeliads on the trunk (near detail only), besides the one on each perch bough. */
+  epiphytes?: number;
+  /** Thick aerial roots dropping from the limbs to the ground (strangler fig). */
+  aerial?: number;
 }
 
 /**
@@ -44,24 +61,34 @@ const GROWTH: Record<TreeKind, { h: number; r: number; c: number }> = {
 };
 const grown = (kind: TreeKind, specs: TreeSpec[]): TreeSpec[] => specs.map((sp) => ({ ...sp, height: sp.height * GROWTH[kind].h, radius: sp.radius * GROWTH[kind].r, crown: sp.crown * GROWTH[kind].c, lean: sp.lean * GROWTH[kind].h, hanging: sp.hanging }));
 
+/**
+ * AMAZON CAST (terra firme lowland forest). Footprints (radius, lobes, flare) are unchanged from the earlier generic jungle so placements,
+ * colliders and wildlife anchors stay where they are; what changes is each tree's character:
+ *   giant 0  samauma / kapok (Ceiba pentandra): plank buttresses taller than a person, pale smooth bole, a wide flat parasol crown
+ *   giant 1  Brazil nut (Bertholletia excelsa): dark fissured column, bare for two thirds of its height, domed crown
+ *   giant 2  strangler fig (Ficus): low spreading limbs, curtains of aerial roots and lianas, loaded with epiphytes
+ *   tall     canopy layer: a liana-hung hardwood, a pale rubber tree (Hevea), a mossy epiphyte-laden hardwood
+ *   broad    sub-canopy spreaders heavy with bromeliads and lianas
+ *   slender  embauba (Cecropia): pale ringed pole, sparse candelabra of big palmate leaves; the pioneer of every gap
+ */
 const AUTHORED: Record<TreeKind, TreeSpec[]> = {
   giant: [
-    { seed: 101, height: 38, radius: 1.55, lobes: 5, flare: 0.72, branchStart: 0.5, limbs: 7, crown: 7.5, lean: 0.9, vines: 3, hanging: 9, tone: 0.2 },
-    { seed: 202, height: 42, radius: 1.8, lobes: 6, flare: 0.8, branchStart: 0.55, limbs: 8, crown: 8.5, lean: -1.2, vines: 3, hanging: 10, tone: 0.45 },
-    { seed: 303, height: 34, radius: 1.4, lobes: 4, flare: 0.62, branchStart: 0.42, limbs: 7, crown: 9, lean: 0.4, vines: 2, hanging: 8, tone: 0.1 },
+    { seed: 101, height: 38, radius: 1.55, lobes: 5, flare: 0.72, branchStart: 0.7, limbs: 7, crown: 9, lean: 0.9, vines: 3, hanging: 9, tone: 0.25, plank: true, buttH: 1.9, pale: 0.75, flat: 0.75, epiphytes: 2 },
+    { seed: 202, height: 42, radius: 1.8, lobes: 6, flare: 0.8, branchStart: 0.68, limbs: 8, crown: 8.5, lean: -1.2, vines: 2, hanging: 8, tone: 0.4, flat: 0.25, epiphytes: 1 },
+    { seed: 303, height: 34, radius: 1.4, lobes: 4, flare: 0.62, branchStart: 0.42, limbs: 7, crown: 9, lean: 0.4, vines: 5, hanging: 13, tone: 0.1, epiphytes: 4, aerial: 5 },
   ],
   tall: [
-    { seed: 411, height: 27, radius: 0.85, lobes: 4, flare: 0.48, branchStart: 0.55, limbs: 5, crown: 5, lean: 0.6, vines: 2, hanging: 4, tone: 0.3 },
-    { seed: 422, height: 30, radius: 0.8, lobes: 5, flare: 0.42, branchStart: 0.62, limbs: 5, crown: 4.6, lean: -0.7, vines: 1, hanging: 3, tone: 0.15 },
-    { seed: 433, height: 24, radius: 0.95, lobes: 3, flare: 0.5, branchStart: 0.5, limbs: 6, crown: 5.4, lean: 0.3, vines: 2, hanging: 5, tone: 0.5 },
+    { seed: 411, height: 27, radius: 0.85, lobes: 4, flare: 0.48, branchStart: 0.55, limbs: 5, crown: 5, lean: 0.6, vines: 3, hanging: 6, tone: 0.3, epiphytes: 2 },
+    { seed: 422, height: 30, radius: 0.8, lobes: 5, flare: 0.42, branchStart: 0.66, limbs: 5, crown: 4.8, lean: -0.7, vines: 1, hanging: 3, tone: 0.15, pale: 0.5, flat: 0.3 },
+    { seed: 433, height: 24, radius: 0.95, lobes: 3, flare: 0.5, branchStart: 0.5, limbs: 6, crown: 5.4, lean: 0.3, vines: 2, hanging: 7, tone: 0.5, epiphytes: 3 },
   ],
   broad: [
-    { seed: 511, height: 19, radius: 1.0, lobes: 5, flare: 0.45, branchStart: 0.38, limbs: 6, crown: 6.8, lean: 0.4, vines: 2, hanging: 5, tone: 0.1 },
-    { seed: 522, height: 17, radius: 0.9, lobes: 4, flare: 0.4, branchStart: 0.34, limbs: 6, crown: 6.2, lean: -0.5, vines: 1, hanging: 4, tone: 0.4 },
+    { seed: 511, height: 19, radius: 1.0, lobes: 5, flare: 0.45, branchStart: 0.38, limbs: 6, crown: 6.8, lean: 0.4, vines: 3, hanging: 7, tone: 0.1, epiphytes: 3 },
+    { seed: 522, height: 17, radius: 0.9, lobes: 4, flare: 0.4, branchStart: 0.34, limbs: 6, crown: 6.2, lean: -0.5, vines: 2, hanging: 6, tone: 0.4, epiphytes: 2 },
   ],
   slender: [
-    { seed: 611, height: 22, radius: 0.5, lobes: 3, flare: 0.3, branchStart: 0.6, limbs: 4, crown: 3.6, lean: -0.8, vines: 1, hanging: 3, tone: 0.55 },
-    { seed: 622, height: 19, radius: 0.55, lobes: 3, flare: 0.28, branchStart: 0.55, limbs: 4, crown: 3.4, lean: 0.7, vines: 1, hanging: 2, tone: 0.3 },
+    { seed: 611, height: 22, radius: 0.5, lobes: 3, flare: 0.3, branchStart: 0.68, limbs: 4, crown: 3.8, lean: -0.8, vines: 0, hanging: 1, tone: 0.6, pale: 0.85, ringed: true, crownTile: 'palmate' },
+    { seed: 622, height: 19, radius: 0.55, lobes: 3, flare: 0.28, branchStart: 0.64, limbs: 4, crown: 3.6, lean: 0.7, vines: 0, hanging: 1, tone: 0.45, pale: 0.8, ringed: true, crownTile: 'palmate' },
   ],
 };
 
@@ -153,7 +180,7 @@ export function treePerches(kind: TreeKind): PerchLocal[] {
 export type TreeLod = 'hi' | 'lo';
 
 /** Crown cards are trimmed to the clump's alpha silhouette (see blobCardGeometry): fewer wasted fragments. */
-const crownCard = (size: number) => blobCardGeometry('clump', size);
+const crownCard = (size: number, tile: 'clump' | 'palmate' = 'clump') => blobCardGeometry(tile, size);
 
 // ---------------------------------------------------------------------------
 // Wind weights (see WindWeights in lib/geo.ts and foliageCardMaterial)
@@ -202,12 +229,18 @@ export function barkGroove(spec: TreeSpec, theta: number, y: number): number {
   return a * 0.65 + b * 0.35;
 }
 
+/** Buttress strength at height y (1 at the ground): fades by ~5 m, later for species with tall buttresses (`buttH`). */
+function flareFallAt(spec: TreeSpec, y: number): number {
+  return Math.exp(-Math.max(0, y) / ((1.4 + spec.height * 0.045) * (spec.buttH ?? 1)));
+}
+
 function trunkRadiusAt(spec: TreeSpec, y: number, theta: number): number {
   const t = Math.min(1, Math.max(0, y / spec.height));
   let r = spec.radius * (1.12 - 0.45 * t);
-  const lobe = Math.pow(Math.max(0, Math.cos(spec.lobes * theta + spec.seed)), 1.4);
-  const flareFall = Math.exp(-Math.max(0, y) / (1.4 + spec.height * 0.045));
-  r *= 1 + (spec.flare * lobe + 0.25) * flareFall;
+  // Plank buttresses are thin fins (a sharp lobe profile); the crest reaches as far as a rounded lobe would, so the footprint is the same.
+  const lobe = Math.pow(Math.max(0, Math.cos(spec.lobes * theta + spec.seed)), spec.plank ? 12 : 1.4);
+  const flareFall = flareFallAt(spec, y);
+  r *= 1 + (spec.flare * lobe + (spec.plank ? 0.1 : 0.25)) * flareFall;
   r *= 1 + 0.055 * (barkGroove(spec, theta, y) - 0.5) * 2;
   return r;
 }
@@ -217,8 +250,7 @@ export function trunkAxisAt(kind: TreeKind, variant: number, y: number): { x: nu
   const spec = TREE_SPECS[kind][variant % TREE_SPECS[kind].length];
   const c = trunkCenter(spec, y, new Vector3());
   const t = Math.min(1, Math.max(0, y / spec.height));
-  const flareFall = Math.exp(-Math.max(0, y) / (1.4 + spec.height * 0.045));
-  const r = spec.radius * (1.12 - 0.45 * t) * (1 + (spec.flare * 0.3 + 0.25) * flareFall);
+  const r = spec.radius * (1.12 - 0.45 * t) * (1 + (spec.plank ? spec.flare * 0.08 + 0.1 : spec.flare * 0.3 + 0.25) * flareFallAt(spec, y));
   return { x: c.x, z: c.z, r };
 }
 
@@ -241,7 +273,21 @@ function trunkGeometry(spec: TreeSpec, lod: TreeLod): BufferGeometry {
     for (let y = -0.7; y < spec.height; y += y < 4.5 ? 0.6 : y < 14 ? 2.4 : 4.5) rings.push(y);
     rings.push(spec.height);
   } else rings.push(-0.7, 0.9, 2.8, 6.5, spec.height * 0.5, spec.height * 0.78, spec.height);
-  const radial = lod === 'hi' ? 18 : 9;
+  // Ring angles. Rounded trunks: evenly spaced. Plank buttresses: vertices ON each fin (crest, two tight shoulders) and in the trough between
+  // fins, so a fin is a real thin plane and not an aliased bump (cheap version: crest and trough only).
+  const angles: number[] = [];
+  if (spec.plank) {
+    const period = (Math.PI * 2) / spec.lobes;
+    for (let l = 0; l < spec.lobes; l++) {
+      const crest = l * period - spec.seed / spec.lobes;
+      if (lod === 'hi') angles.push(crest - period * 0.5, crest - period * 0.2, crest - period * 0.045, crest, crest + period * 0.045, crest + period * 0.2);
+      else angles.push(crest - period * 0.5, crest - period * 0.07, crest, crest + period * 0.07);
+    }
+  } else {
+    const n = lod === 'hi' ? 18 : 9;
+    for (let j = 0; j < n; j++) angles.push((j / n) * Math.PI * 2);
+  }
+  const radial = angles.length;
   const positions: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
@@ -249,7 +295,7 @@ function trunkGeometry(spec: TreeSpec, lod: TreeLod): BufferGeometry {
   rings.forEach((y, i) => {
     trunkCenter(spec, y, c);
     for (let j = 0; j < radial; j++) {
-      const th = (j / radial) * Math.PI * 2;
+      const th = angles[j];
       const r = trunkRadiusAt(spec, Math.max(0, y), th);
       positions.push(c.x + Math.cos(th) * r, y, c.z + Math.sin(th) * r);
       uvs.push(j / radial, i * 0.25);
@@ -273,8 +319,12 @@ function trunkGeometry(spec: TreeSpec, lod: TreeLod): BufferGeometry {
 }
 
 /** Bark colour: ridged bark, moss climbing from the ground on shaded/upward faces, AO at the root flare. */
+const PALE_BARK = new Color('#a39c8a');
+const PALE_LICHEN = new Color('#8fa184');
+
 function barkColor(spec: TreeSpec): ColorFn {
   const out = new Color();
+  const pale = new Color();
   return (p, n) => {
     // Grooves (shared with the geometry) are dark, ridge crests catch light; noise breaks it up.
     const th = Math.atan2(p.z, p.x);
@@ -285,6 +335,14 @@ function barkColor(spec: TreeSpec): ColorFn {
       smoothstep(0.42, 0.64, fbm(p.x * 0.8, p.y * 0.35 + p.z * 0.8, spec.seed + 5, 3)) * (1 - smoothstep(1.5, 10, p.y)) * 0.85 +
       smoothstep(0.35, 0.8, n.y) * 0.5;
     out.lerp(BARK.moss, Math.min(1, mossAmt));
+    if (spec.pale) {
+      // Smooth pale bole (kapok, rubber tree, embauba): grey-buff with faint lichen blotches; moss still creeps up the base.
+      const blotch = fbm(p.x * 0.9 + 3, p.y * 0.6 + p.z * 0.9, spec.seed + 9, 2);
+      pale.copy(PALE_BARK).lerp(PALE_LICHEN, smoothstep(0.5, 0.75, blotch) * 0.6).multiplyScalar(0.8 + 0.2 * groove);
+      // Cecropia: dark leaf-scar rings every ~0.9 m.
+      if (spec.ringed) pale.multiplyScalar(1 - 0.38 * smoothstep(0.86, 0.97, Math.abs(Math.sin(p.y * 3.5))));
+      out.lerp(pale, spec.pale * (1 - Math.min(1, mossAmt) * 0.7));
+    }
     out.multiplyScalar(0.5 + 0.5 * smoothstep(-0.4, 1.2, p.y));
     out.multiplyScalar(1 - 0.28 * smoothstep(12, 32, p.y));
     return out;
@@ -318,6 +376,24 @@ function limb(parts: Part[], start: Vector3, dir: Vector3, len: number, r0: numb
   return { end, mid, at: (t) => (t < 0.5 ? start.clone().lerp(mid, t * 2) : mid.clone().lerp(end, (t - 0.5) * 2)) };
 }
 
+/**
+ * A tank bromeliad: a rosette of arching strap leaves around a red heart. Amazon limbs and trunks carry them by the dozen.
+ * `m` places the rosette base (its +y is the growing axis). ~36 triangles.
+ */
+function bromeliad(parts: Part[], m: Matrix4, size: number, rng: () => number): void {
+  const n = 7;
+  const green = lerpColor(PAL.leafMid, PAL.leafLight, 0.3 + 0.5 * rng());
+  const heart = new Color(PAL.heliconia);
+  const y0 = rng() * 6.28;
+  for (let i = 0; i < n; i++) {
+    const tilt = 0.75 + 0.35 * rng();
+    parts.push({ geo: cardGeometry('broad', size * (0.85 + 0.3 * rng()), size * 0.2, 0.55, 2), m: m.clone().multiply(mat(0, 0, 0, tilt, y0 + (i / n) * 6.28, 0)), color: green, wind: { flutter: 0.25 } });
+  }
+  for (let i = 0; i < 3; i++) {
+    parts.push({ geo: cardGeometry('broad', size * 0.42, size * 0.14, 0.2, 1), m: m.clone().multiply(mat(0, 0, 0, 0.3, y0 + 1 + (i / 3) * 6.28, 0)), color: heart });
+  }
+}
+
 export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi'): Mesh {
   const spec = TREE_SPECS[kind][variant % TREE_SPECS[kind].length];
   const rng = makeRandom(spec.seed + (lod === 'lo' ? 7 : 0));
@@ -347,14 +423,30 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
     parts.push({ geo: solidUV(tubeAlong(pts, (t) => rad * (1.2 - 0.5 * t), 4, 10)), color: lerpColor('#2c4520', '#4a5a2a', rng()), wind: wood });
   }
 
+  // Bromeliads lodged on the trunk, above head height (near detail only).
+  if (lod === 'hi') {
+    const erng = makeRandom(spec.seed + 91);
+    for (let i = 0; i < (spec.epiphytes ?? 0); i++) {
+      const th = erng() * Math.PI * 2;
+      const y = 2.6 + erng() * Math.min(9, spec.height * 0.3);
+      const at = surface(y, th, 1.02);
+      // lean out from the bark: growing axis tilted ~35 degrees away from the trunk
+      bromeliad(parts, mat(at.x, at.y, at.z, 0, -th + Math.PI / 2, 0).multiply(mat(0, 0, 0, 0.6, 0, 0)), 0.75 + 0.35 * erng(), erng);
+    }
+  }
+
   // Limbs -> sub-limbs -> crown clusters.
+  const flatK = spec.flat ?? 0;
+  const tile = spec.crownTile ?? 'clump';
+  const arng = makeRandom(spec.seed + 57);
+  let aerialLeft = spec.aerial ?? 0;
   const crowns: { p: Vector3; r: number }[] = [];
   const nLimbs = lod === 'hi' ? spec.limbs : Math.max(3, Math.round(spec.limbs * 0.55));
   for (let i = 0; i < nLimbs; i++) {
     const th = (i / nLimbs) * Math.PI * 2 + rng() * 0.6;
-    const h = spec.height * (spec.branchStart + (0.93 - spec.branchStart) * rng());
+    const h = spec.height * (spec.branchStart + (0.93 - spec.branchStart) * rng() * (1 - 0.45 * flatK));
     const start = surface(h, th, 0.72);
-    const len = spec.crown * (0.7 + 0.55 * rng()) * (0.65 + 0.5 * (h / spec.height));
+    const len = spec.crown * (0.7 + 0.55 * rng()) * (0.65 + 0.5 * (h / spec.height)) * (1 + 0.25 * flatK);
     const dir = new Vector3(Math.cos(th), 0, Math.sin(th));
     const r0 = Math.max(0.1, trunkRadiusAt(spec, h, th) * 0.32);
     const L = limb(parts, start, dir, len, r0, 0.1 + 0.2 * rng(), bark, lod === 'hi' ? 4 : 4, lod === 'hi' ? 5 : 3, wood);
@@ -384,6 +476,15 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
         parts.push({ geo: vc, m: mat(lc.x, lc.y - 1.0, lc.z, 0, rng() * 6.28, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, rng()), wind: lianaWind(at.y, drop, spec.height, 0, true) });
       }
     }
+    // Strangler fig: a thick aerial root drops from the limb to the ground and thickens into a prop (both detail levels: it is silhouette).
+    if (aerialLeft > 0 && i % 2 === 0) {
+      aerialLeft--;
+      const top = L.at(0.35 + 0.3 * arng());
+      const foot = new Vector3(top.x + (arng() - 0.5) * 1.2, -0.3, top.z + (arng() - 0.5) * 1.2);
+      const belly = top.clone().lerp(foot, 0.5).add(new Vector3((arng() - 0.5) * 0.6, 0, (arng() - 0.5) * 0.6));
+      const rr = 0.07 + 0.06 * arng();
+      parts.push({ geo: solidUV(tubeAlong([top, belly, foot], (t) => rr * (0.8 + 0.9 * t * t), 4, lod === 'hi' ? 6 : 3)), color: bark });
+    }
   }
   // Perch boughs (see PERCH_BOUGHS): identical in both detail levels.
   // A leafy tuft beyond each bough's tip so the boughs do not read as bare sticks.
@@ -397,6 +498,12 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
       const m = mat(at.x, at.y, at.z, -Math.PI / 2 + tilt, yaw, 0).multiply(mat(0, -size / 2, 0));
       parts.push({ geo: crownCard(size), m, normalFn: softNormals(new Vector3(0, bh.h - 2.5, 0), 0.5), color: (p) => boughLeaf(p, 0.55).multiplyScalar(0.92), wind: { flutter: 0.8 } });
     };
+    if (lod === 'hi' && (spec.epiphytes ?? 0) > 0) {
+      // a bromeliad on the bough's inner third (t ~0.28-0.33): well short of the perching spots
+      const brng = makeRandom(spec.seed + Math.round(bh.h * 10));
+      const a = pts[1].clone().lerp(pts[2], 0.1 + 0.2 * brng());
+      bromeliad(parts, mat(a.x, a.y + boughRadius(bh)(0.3) * 0.8, a.z, 0, brng() * 6.28, 0), 0.8 + 0.3 * brng(), brng);
+    }
     const dirv = new Vector3(Math.cos(bh.ang), 0, Math.sin(bh.ang));
     const sz = 1.9 + bh.len * 0.08;
     tuft(pts[3].clone().addScaledVector(dirv, sz * 0.55).add(new Vector3(0, -0.1, 0)), sz, bh.ang * 3, 0.08);
@@ -412,12 +519,12 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
     const n = lod === 'hi' ? 3 : 1;
     for (let k = 0; k < n; k++) {
       const size = cr.r * (1.5 + 0.9 * rng()) * (lod === 'lo' ? 1.45 : 1);
-      const card = crownCard(size);
+      const card = crownCard(size, tile);
       // Orientation mix: tilted flat-ish masses read as canopy layers; vertical ones fill the sides.
-      const flat = k % 2 === 0;
+      const flat = k % 2 === 0 || (flatK > 0 && rng() < flatK);
       const rx = flat ? -Math.PI / 2 + (rng() - 0.5) * 0.5 : (rng() - 0.5) * 0.5;
       const ry = rng() * Math.PI * 2;
-      const off = new Vector3((rng() - 0.5) * cr.r, (rng() - 0.35) * cr.r * 0.5, (rng() - 0.5) * cr.r);
+      const off = new Vector3((rng() - 0.5) * cr.r, (rng() - 0.35) * cr.r * 0.5 * (1 - 0.7 * flatK), (rng() - 0.5) * cr.r);
       const px = cr.p.x + off.x;
       const py = cr.p.y + off.y;
       const pz = cr.p.z + off.z;

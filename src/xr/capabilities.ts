@@ -27,8 +27,9 @@ export async function detectXR(): Promise<XRReport> {
   } catch (err) {
     report.detail = `isSessionSupported failed: ${(err as Error).message}`;
   }
-  report.headline = report.immersiveVR ? 'VR ready' : 'Desktop mode';
-  if (!report.detail) report.detail = report.immersiveVR ? 'Headset detected: press Enter VR.' : 'No immersive-vr device here. Use WASD + mouse, or open on a Quest.';
+  const touch = navigator.maxTouchPoints > 0 && globalThis.matchMedia?.('(pointer: coarse)').matches === true;
+  report.headline = report.immersiveVR ? 'VR ready' : touch ? 'Phone mode' : 'Desktop mode';
+  if (!report.detail) report.detail = report.immersiveVR ? 'Headset detected: press Enter VR.' : touch ? 'No headset here. Left thumb walks, drag to look; or open on a Quest.' : 'No immersive-vr device here. Use WASD + mouse, or open on a Quest.';
   return report;
 }
 

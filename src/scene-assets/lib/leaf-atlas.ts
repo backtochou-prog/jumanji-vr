@@ -40,7 +40,8 @@ export type LeafTile =
   | 'grass'
   | 'heart'
   | 'frond2'
-  | 'bark';
+  | 'bark'
+  | 'palmate';
 
 const TILE_INDEX: Record<LeafTile, number> = {
   broad: 0,
@@ -56,6 +57,7 @@ const TILE_INDEX: Record<LeafTile, number> = {
   heart: 10,
   frond2: 11,
   bark: 12,
+  palmate: 13,
 };
 
 /** UV rectangle (u0, v0, u1, v1) of a tile, inset by the padding. */
@@ -154,6 +156,36 @@ const painters: Record<LeafTile, (u: number, v: number) => Pix> = {
       }
     }
     return { r: shade * 0.82, g: shade, b: shade * 0.55, a };
+  },
+  // Cecropia (embauba) leaf whorl: a handful of big palmate, deeply lobed leaves with pale midribs, filling a disc like the clump tile.
+  palmate: (u, v) => {
+    const leaves: [number, number, number, number][] = [
+      [0.5, 0.5, 0.27, 0.3],
+      [0.26, 0.68, 0.22, 1.4],
+      [0.74, 0.7, 0.22, 2.6],
+      [0.27, 0.3, 0.21, 3.9],
+      [0.73, 0.29, 0.22, 5.1],
+      [0.5, 0.84, 0.15, 0.9],
+      [0.5, 0.15, 0.14, 4.4],
+    ];
+    let a = 0;
+    let shade = 0.5;
+    for (let i = 0; i < leaves.length; i++) {
+      const [cx, cy, R, rot] = leaves[i];
+      const dx = u - cx;
+      const dy = v - cy;
+      const r = Math.hypot(dx, dy) / R;
+      if (r > 1.05) continue;
+      const lobe = Math.abs(Math.cos((Math.atan2(dy, dx) + rot) * 4.5)); // 9 lobes
+      const edge = 0.3 + 0.7 * Math.pow(lobe, 0.55);
+      const c = cover((r - edge) * R, 0.012);
+      if (c > a) {
+        a = c;
+        const rib = Math.pow(lobe, 14) * 0.22;
+        shade = 0.56 + 0.26 * (1 - r) + rib + 0.05 * Math.sin(i * 2.3);
+      }
+    }
+    return { r: shade * 0.84, g: shade, b: shade * 0.6, a };
   },
   // Vine: curved stem with heart-shaped leaves.
   vine: (u, v) => {
