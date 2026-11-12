@@ -22,7 +22,7 @@
     "render": {
       "fov": 75,
       "near": 0.1,
-      "far": 260
+      "far": 700
     },
     "features": {
       "locomotion": {

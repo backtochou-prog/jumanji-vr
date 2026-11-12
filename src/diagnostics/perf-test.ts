@@ -5,7 +5,7 @@ import { governorInfo } from '../systems/quality-governor.js';
 import { loadQuality, qualityState } from '../settings/quality.js';
 import { atmosphere } from '../systems/atmosphere-system.js';
 import { lodInfo } from '../systems/chunk-lod-system.js';
-import { MTN_VIEWS, SPAWN, SPAWN_YAW_DEG, TEST_POSES, areaLabel, terrainHeight } from '../world/layout.js';
+import { MTN_VIEWS, START, START_Y, START_YAW_DEG, TEST_POSES, areaLabel, terrainHeight } from '../world/layout.js';
 
 /** A repeatable test pose: the three jungle poses or any mountain station (summit, summit-down, descent, cleft, bridge-mid, brink ...). */
 export type TestId = string;
@@ -296,7 +296,7 @@ export class PerfTestSystem extends createSystem({}) {
       startPerfTest(w, next, { warmupMs: perfTest.warmupMs, sampleMs: perfTest.sampleMs, governor: perfTest.governorOn, desktop: perfTest.desktop, returnToStart: perfTest.returnToStart });
       return;
     }
-    if (perfTest.returnToStart) placePlayer(w, SPAWN[0], SPAWN[1], SPAWN_YAW_DEG);
+    if (perfTest.returnToStart) placePlayer(w, START[0], START[1], START_YAW_DEG, START_Y);
   }
 }
 

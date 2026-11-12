@@ -22,6 +22,7 @@ export type Vec2 = readonly [number, number];
 
 import { PLATFORM, TERRACE, VALLEY, buildRoute, corridorWalls, gradeRoute, landform, mountainWeight, ringWalls, routeNear, viewpoints } from './mountain.ts';
 import type { GuardWall } from './mountain.ts';
+import { EVEREST, buildEverestRoute, everestRise, everestSmooth, everestViewpoints, gradeEverest } from './everest.ts';
 import { clamp01, fbm, makeRandom, nearestOnPolyline, sampleSpline, smoothstep, valueNoise } from './math.ts';
 export { clamp01, fbm, makeRandom, smoothstep, valueNoise };
 
@@ -468,12 +469,17 @@ function blendedBase(x: number, z: number): number {
 /** The mountain expedition route (climb, summit, descent, bridge, terrace); see mountain.ts. */
 export const MTN = buildRoute(blendedBase);
 
+/** Everest (see everest.ts and the section below): the trail down from the summit to the knoll; heights follow the ground (jungle hills + the peak). */
+export const EV = buildEverestRoute((x, z) => jungleHeight(x, z) + everestRise(x, z));
+export { EVEREST };
+
 /**
  * Is this point part of the mountain expedition (the landform replaces the jungle hills) or on its route corridor
  * (plus `pad` metres)? Jungle placements use it to step aside, so the existing jungle is untouched where the
  * mountain does not reach and nothing grows on the route.
  */
 export function inMountainZone(x: number, z: number, pad = 2): boolean {
+  if (z > EVEREST.z0 && inEverestZone(x, z, pad)) return true;
   if (x < 20) return false;
   if (mountainWeight(x, z) > 0.02) return true;
   const h = routeNear(MTN, x, z);
@@ -488,7 +494,7 @@ const MTN_WALL_START = (() => {
 
 /** Does the jungle boundary ring leave a gap here for the mountain route? */
 export function ringOpening(x: number, z: number): boolean {
-  const h = routeNear(MTN, x, z);
+  const h = z > EVEREST.z0 ? routeNear(EV, x, z) : routeNear(MTN, x, z); // (the Everest trail arrives through the back of the knoll's walk disc)
   return h.dist < h.hw + 0.18 + 0.25 + 0.5; // exactly the corridor lane: the ring's pieces are 1 m long here, so the gap is sealed by the corridor walls
 }
 
@@ -514,8 +520,48 @@ export const MTN_GUARDS: GuardWall[] = (() => {
   ];
 })();
 
+// ---------------------------------------------------------------------------
+// Everest (the start): the snow peak south of the knoll; see everest.ts
+// ---------------------------------------------------------------------------
+
+/** Is this point on the peak (more than 2 m of rise) or on its trail corridor (+ `pad`)? */
+export function inEverestZone(x: number, z: number, pad = 2): boolean {
+  if (z <= EVEREST.z0) return false;
+  if (everestSmooth(x, z) > 2) return true;
+  const h = routeNear(EV, x, z);
+  return h.dist < h.hw + pad;
+}
+
+/** Stations on the peak. */
+export const EVEREST_VIEWS = everestViewpoints(EV);
+
+/**
+ * THE START OF THE GAME: the summit of Everest (feet height START_Y), looking down the summit ridge where the trail leaves the platform.
+ * (SPAWN stays the knoll crown: every knoll rule - vista, meadow, intro - is anchored to it, and `?area=entrance` still starts there.)
+ */
+export const START: Vec2 = [EVEREST.x, EVEREST.z];
+export const START_Y = EV.samples[0].y;
+export const START_YAW_DEG = Math.round(EVEREST_VIEWS.everest.yawDeg * 10) / 10;
+
+/** Invisible guard walls of the Everest trail: both sides of the bench from the summit ring to the knoll's walk disc, + the summit ring (one exit). */
+export const EVEREST_GUARDS: GuardWall[] = (() => {
+  const pr = EVEREST.platform + 0.25;
+  const exits: [number, number][] = [];
+  for (let i = 1; i < EV.samples.length; i++) {
+    const a = EV.samples[i - 1];
+    const b = EV.samples[i];
+    if ((Math.hypot(a.x - EVEREST.x, a.z - EVEREST.z) - pr) * (Math.hypot(b.x - EVEREST.x, b.z - EVEREST.z) - pr) <= 0) exits.push([b.x, b.z]);
+  }
+  const corridor = corridorWalls(EV, 0).filter(
+    (w) => Math.hypot(w.x - EVEREST.x, w.z - EVEREST.z) > pr - 0.3 && Math.hypot(w.x - HILL.walk.cx, w.z - HILL.walk.cz) > HILL.walk.r - 0.3,
+  );
+  return [...corridor, ...ringWalls(EVEREST.x, EVEREST.z, pr, START_Y, exits, EVEREST.hw + 0.18 + 0.25 + 0.4)];
+})();
+
 /** Terrain LOD: 96 m root cells from (35, -300); a detailed root shows its fine tiles within `fine` m of the player (`fineLow` in the low tier), a coarse stand-in beyond. */
 export const TERRAIN_LOD = { x0: 35, z0: -300, size: 96, fine: 150, fineLow: 100, hysteresis: 20 } as const;
+/** Everest terrain: 96 m root cells from (x0, z0), `nx` x `nz` of them; a root the trail crosses draws its fine tiles within `fine` m, a coarse stand-in beyond. */
+export const EVEREST_LOD = { x0: -481, z0: 62, nx: 10, nz: 8, size: 96, fine: 150, hysteresis: 20 } as const;
 
 /**
  * Where the player is, for the diagnostics and the test results: the three jungle areas, or on the mountain the station of the route
@@ -523,6 +569,10 @@ export const TERRAIN_LOD = { x0: 35, z0: -300, size: 96, fine: 150, fineLow: 100
  * (ridge, valley, gorge) away from it.
  */
 export function areaLabel(x: number, y: number, z: number): string {
+  if (z > EVEREST.z0 && inEverestZone(x, z, 0)) {
+    if (Math.hypot(x - EVEREST.x, z - EVEREST.z) < EVEREST.platform + 3) return 'everest summit';
+    return y > EVEREST.deck + 14 ? 'everest snow fields' : y > EVEREST.deck - 14 ? 'everest cloud deck' : y > 30 ? 'everest rock faces' : 'everest foot';
+  }
   if (mountainWeight(x, z) > 0.3) {
     const h = routeNear(MTN, x, z);
     if (h.dist < 14 && Math.abs(y - h.y) < 6) {
@@ -543,6 +593,7 @@ export const MTN_VIEWS = viewpoints(MTN);
  * x = 22, with the expedition route graded on top (bench, summit platform, collapse hollow, brink terrace).
  */
 export function terrainHeight(x: number, z: number): number {
+  if (z > EVEREST.z0) return gradeEverest(EV, x, z, jungleHeight(x, z) + everestRise(x, z)); // Everest stands on the jungle hills south of the knoll
   return x < 6 ? jungleHeight(x, z) : gradeRoute(MTN, x, z, blendedBase(x, z));
 }
 
@@ -686,8 +737,12 @@ export function meadowTuftDensity(x: number, z: number): number {
 // Culling cells and distance LOD (vegetation is static-batched per cell and class)
 // ---------------------------------------------------------------------------
 
-/** Camera far plane in the jungle (m): the fog hides 91 % of the world by 240 m, so nothing visible is ever cut (the old 100 m cut the backdrop cliff/waterfall/ridges). The mountain opens it up to 1 km. */
-export const JUNGLE_FAR = 260;
+/**
+ * Camera far plane in the jungle (m). The fog hides 91 % of the world by 240 m, but NOT Everest's snows: the terrain shader keeps the peak's upper faces
+ * out of the low haze, so it stands over the knoll (its summit is ~400 m from the crown) and the sky sphere must sit behind it. The east mountain opens the
+ * view to 1 km, the air above Everest's clouds to 1.5 km.
+ */
+export const JUNGLE_FAR = 700;
 
 /** Jungle landmarks and terrain tiles (not cell-batched) are drawn only within this distance (m) of the player; at 120 m the fog hides 68 % of them anyway. */
 export const JUNGLE_LANDMARK_CAP = 120;

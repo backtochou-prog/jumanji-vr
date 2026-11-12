@@ -1,25 +1,35 @@
 import { Color, createSystem, DomeGradient, FogExp2, HemisphereLightComponent, Vector3 } from '@iwsdk/core';
 import { MZ } from '../world/mountain.js';
 import { JUNGLE_FAR, smoothstep, vistaAt } from '../world/layout.js';
+import { EVEREST, everestSmooth } from '../world/everest.js';
+import { everestAir } from '../scene-assets/lib/materials.js';
 import { loadComfort } from '../settings/comfort.js';
 
 /**
  * Atmosphere. Three independent channels, all eased, all written to the scene at 4 Hz and only when something really changed:
  *
  *  open   (0..1)  HEIGHT based, only on the mountain (x > MZ.x0 - 4): the jungle's short wet view opens to hundreds of metres, the fog thins to 0.0022 and the
- *                 camera far plane grows from JUNGLE_FAR (260 m) to 1 km. It never changes on the Overlook Knoll (x <= 18, so `open` is 0 there).
+ *                 camera far plane grows from JUNGLE_FAR to 1 km. It never changes on the Overlook Knoll (x <= 18, so `open` is 0 there).
  *  vista  (0..1)  POSITION based (never height): 1 on the knoll crown, 0 from 32 m down the ramp (`vistaAt`, layout.ts). The sunlit lookout gets lighter, warmer
  *                 fog (density x 0.65: the backdrop fall at 122 m goes from 74 % to ~42 % fogged), a bluer sky, an open-sky hemisphere fill, and
  *                 ChunkLodSystem reaches farther (a vista-scaled cell cap and landmark caps). It is multiplied by (1 - open): the mountain route never sees it.
  *                 It returns smoothly to the humid jungle as the player walks down (the arrival beat).
  *  veil   (0..1)  a multiplier hook written by the intro system (the opening reveal): density x (1 + veil x 0.55). Default 0 = no effect.
  *
+ *  peak   (0..1)  on Everest's slopes (more than a few metres of the peak's rise under the feet): no canopy overhead, so the hemisphere fill is the open sky's.
+ *  high   (0..1)  ABOVE Everest's cloud deck (eye height, only on the peak): thin, clear high-altitude air (fog 0.0009), a deeper blue sky, snow bounce in the
+ *                 fill light and a 1.5 km far plane (the sea of clouds and the snow peaks standing in it, see EverestSystem).
+ *  white  (0..1)  INSIDE the cloud deck (within ~14 m of it, full within 3 m): the world goes white (fog 0.04: ~35 m of sight); the sky pack and the peak's
+ *                 clear-air exemption (`everestAir`, the terrain shader) fade with it.
+ *
+ * The far plane is JUNGLE_FAR (700 m) in the jungle: the fog hides everything past ~250 m, except Everest's snows, which the terrain shader keeps
+ * out of the low haze above the cloud deck, so the peak stands over the knoll and over every gap in the canopy.
+ *
  * `vista` eases (rate 1/s) so a teleport or a respawn does not jump the fog; it SNAPS instead when reduced motion is on, with ?reveal=0 or any ?test= run
  * (measurements must not drift), and on any move of more than 3 m between two frames (placePlayer, ?area=, tests, safety respawns).
- * The far plane stays 260 m on the knoll: the farthest visible thing is a ridge ~200 m away and the fog hides the rest.
  */
 /** Depth range: near 0.1 m (iwsdk.config.json), far JUNGLE_FAR in the jungle up to 1 km on the mountain. */
-export const atmosphere = { open: 0, far: JUNGLE_FAR, density: 0.0095, vista: 0, veil: 0 };
+export const atmosphere = { open: 0, far: JUNGLE_FAR, density: 0.0095, vista: 0, veil: 0, peak: 0, high: 0, white: 0 };
 
 const FOG_JUNGLE = 0.0095;
 const FOG_SUMMIT = 0.0016; // clear mountain air: the far ranges (380 - 580 m) keep 50 - 20 % of their colour, the valley floor 85 %
@@ -28,7 +38,17 @@ const FOG_VISTA_K = 0.65;
 /** Fog density multiplier of the reveal veil at veil = 1. */
 const VEIL_FOG = 0.55;
 
+const FOG_HIGH = 0.0009; // above the clouds: the sea keeps 92 % of its colour at 300 m, 45 % at 1 km, and meets the sky at the horizon
+const FOG_WHITE = 0.04; // inside the cloud deck
+/** Far plane (m) above Everest's clouds. */
+const FAR_HIGH = 1500;
+const FOG_COLOR_HIGH = new Color('#c9dcec'); // the pale blue-white rim of the sky above the clouds
+const FOG_COLOR_WHITE = new Color('#e4e9ee'); // inside the cloud
+const SKY_HIGH = [0.11, 0.33, 0.8]; // thin air: a deeper blue overhead
+const SKY_WHITE = [0.86, 0.89, 0.92];
+const HEMI_GROUND_HIGH = [0.62, 0.68, 0.78]; // snow bounce
 const FOG_COLOR_JUNGLE = new Color('#b3cbd8'); // pale blue haze: the horizon band of the blue sky
+const FOG_DISPLAY = new Color(); // scratch: the fog colour as displayed (sRGB), for the dome
 const FOG_COLOR_OPEN = new Color('#b2c4cf'); // golden-hour valley haze: pale and warm (the far ranges bake their feet in this colour)
 const FOG_COLOR_VISTA = new Color('#c2d3df'); // warm pale haze of the sunlit lookout
 const SKY_JUNGLE = [0.2, 0.47, 0.88]; // clear blue (was a teal-green canopy tint)
@@ -50,11 +70,16 @@ export class AtmosphereSystem extends createSystem({
   private fogCaptured = false;
   /** Authored hemisphere values per light entity (sky rgb, ground rgb, intensity), captured on first sight for the same reason. */
   private readonly hemiBase = new Map<unknown, number[]>();
+  /** The dome's authored ground colour, captured on first sight. */
+  private domeGround: number[] | null = null;
 
   private acc = 0;
   private lastOpen = -1;
   private lastVista = -1;
   private lastVeil = -1;
+  private lastPeak = -1;
+  private lastHigh = -1;
+  private lastWhite = -1;
   private lastX = Number.NaN;
   private lastZ = Number.NaN;
   private snap = false;
@@ -68,18 +93,51 @@ export class AtmosphereSystem extends createSystem({
     // `open` and `vista` ease every frame (a few flops) but the scene is only touched at 4 Hz and only when something really changed:
     // writing the dome gradient fires ECS change handlers, and a camera far-plane change updates the XR render state.
     this.player.getWorldPosition(this.p);
-    const target = this.p.x > MZ.x0 - 4 ? smoothstep(3, 12, this.p.y) : 0;
+    // (the east mountain only: Everest, to the south, has its own channels)
+    const target = this.p.x > MZ.x0 - 4 && this.p.z < EVEREST.z0 + 2 ? smoothstep(3, 12, this.p.y) : 0;
     atmosphere.open += (target - atmosphere.open) * (1 - Math.exp(-delta * 1.2));
     const vTarget = vistaAt(this.p.x, this.p.z);
+    // Everest: on the peak / above its cloud deck / inside the deck (eye height)
+    let pTarget = 0;
+    let hTarget = 0;
+    let wTarget = 0;
+    if (this.p.z > EVEREST.z0 + 4) {
+      pTarget = smoothstep(2, 26, everestSmooth(this.p.x, this.p.z));
+      if (pTarget > 0) {
+        const eye = this.p.y + 1.6;
+        hTarget = smoothstep(EVEREST.deck - 2, EVEREST.deck + 16, eye);
+        wTarget = 1 - smoothstep(3, 14, Math.abs(eye - EVEREST.deck));
+      }
+    }
     const jumped = !(Math.hypot(this.p.x - this.lastX, this.p.z - this.lastZ) <= 3); // also true for the first frame (NaN)
     this.lastX = this.p.x;
     this.lastZ = this.p.z;
     if (this.snap || jumped) atmosphere.vista = vTarget;
     else atmosphere.vista += (vTarget - atmosphere.vista) * (1 - Math.exp(-delta * 1.0));
+    if (jumped) {
+      atmosphere.peak = pTarget;
+      atmosphere.high = hTarget;
+      atmosphere.white = wTarget;
+    } else {
+      // (position-based like the vista; the short ease only hides the 4 Hz steps of the scene writes)
+      const k = 1 - Math.exp(-delta * 2.5);
+      atmosphere.peak += (pTarget - atmosphere.peak) * k;
+      atmosphere.high += (hTarget - atmosphere.high) * k;
+      atmosphere.white += (wTarget - atmosphere.white) * k;
+    }
     this.acc += delta;
     if (this.acc < 0.25) return;
     this.acc = 0;
-    if (Math.abs(atmosphere.open - this.lastOpen) + Math.abs(atmosphere.vista - this.lastVista) + Math.abs(atmosphere.veil - this.lastVeil) < 0.004) return;
+    if (
+      Math.abs(atmosphere.open - this.lastOpen) +
+        Math.abs(atmosphere.vista - this.lastVista) +
+        Math.abs(atmosphere.veil - this.lastVeil) +
+        Math.abs(atmosphere.peak - this.lastPeak) +
+        Math.abs(atmosphere.high - this.lastHigh) +
+        Math.abs(atmosphere.white - this.lastWhite) <
+      0.004
+    )
+      return;
     const scene = this.world.scene;
     const fog = scene.fog as FogExp2 | null;
     if (fog && !('density' in fog)) return;
@@ -88,6 +146,13 @@ export class AtmosphereSystem extends createSystem({
     this.lastOpen = atmosphere.open;
     this.lastVista = atmosphere.vista;
     this.lastVeil = atmosphere.veil;
+    this.lastPeak = atmosphere.peak;
+    this.lastHigh = atmosphere.high;
+    this.lastWhite = atmosphere.white;
+    const high = atmosphere.high;
+    const white = atmosphere.white;
+    // the terrain shader keeps Everest's upper faces out of the low haze, except from inside the cloud
+    everestAir.clear.value = 0.62 * (1 - white);
     // the vista never applies on the mountain (open > 0): the mountain route keeps its own fog, colours and lights
     const vf = atmosphere.vista * (1 - atmosphere.open);
     if (fog) {
@@ -96,9 +161,11 @@ export class AtmosphereSystem extends createSystem({
         if (fog.density > 0 && Math.abs(fog.density - FOG_JUNGLE) > 1e-3) this.fogBase = fog.density;
       }
       const base = this.fogBase + (FOG_SUMMIT - this.fogBase) * atmosphere.open;
-      atmosphere.density = base * (1 - vf * (1 - FOG_VISTA_K)) * (1 + Math.max(0, atmosphere.veil) * VEIL_FOG);
+      const low = base * (1 - vf * (1 - FOG_VISTA_K)) * (1 + Math.max(0, atmosphere.veil) * VEIL_FOG);
+      const clear = low + (FOG_HIGH - low) * high;
+      atmosphere.density = clear + (FOG_WHITE - clear) * white;
       fog.density = atmosphere.density;
-      fog.color.copy(FOG_COLOR_JUNGLE).lerp(FOG_COLOR_OPEN, atmosphere.open).lerp(FOG_COLOR_VISTA, vf);
+      fog.color.copy(FOG_COLOR_JUNGLE).lerp(FOG_COLOR_OPEN, atmosphere.open).lerp(FOG_COLOR_VISTA, vf).lerp(FOG_COLOR_HIGH, high).lerp(FOG_COLOR_WHITE, white);
     }
     const skyMix = SKY_VISTA_MIX * vf;
     for (const e of this.queries.dome.entities) {
@@ -106,15 +173,28 @@ export class AtmosphereSystem extends createSystem({
       const eq = e.getVectorView(DomeGradient, 'equator') as Float32Array;
       for (let i = 0; i < 3; i++) {
         const s = SKY_JUNGLE[i] + (SKY_OPEN[i] - SKY_JUNGLE[i]) * atmosphere.open;
-        sky[i] = s + (SKY_VISTA[i] - s) * skyMix;
+        const v = s + (SKY_VISTA[i] - s) * skyMix;
+        const h = v + (SKY_HIGH[i] - v) * high;
+        sky[i] = h + (SKY_WHITE[i] - h) * white;
       }
-      // The horizon band always matches the fog, so distant fogged ground fades into the sky without a seam.
+      // The horizon band follows the fog colour. The dome writes its values to the framebuffer as they are (display space) while a Color is linear, so
+      // the band is a deeper blue than the fogged ground in front of it: the look of the jungle and of the east mountain (pale ranges on a blue sky).
+      // On Everest nothing hides the lower half of the dome (no canopy, no ridge rings: in the jungle the gradient leans toward the sun and the canopy
+      // covers its dark side), so there the gradient stands upright and both the band and everything below the horizon take the fog's DISPLAYED
+      // colour: haze over the forest below the deck, the far edge of the sea of clouds above it. No seam, and no forest-floor green in the sky.
+      const gr = e.getVectorView(DomeGradient, 'ground') as Float32Array;
+      if (!this.domeGround) this.domeGround = [gr[0], gr[1], gr[2]];
+      const cloud = Math.max(high, white, atmosphere.peak);
       if (fog) {
-        eq[0] = fog.color.r;
-        eq[1] = fog.color.g;
-        eq[2] = fog.color.b;
+        FOG_DISPLAY.copy(fog.color).convertLinearToSRGB();
+        eq[0] = fog.color.r + (FOG_DISPLAY.r - fog.color.r) * cloud;
+        eq[1] = fog.color.g + (FOG_DISPLAY.g - fog.color.g) * cloud;
+        eq[2] = fog.color.b + (FOG_DISPLAY.b - fog.color.b) * cloud;
+        gr[0] = this.domeGround[0] + (FOG_DISPLAY.r - this.domeGround[0]) * cloud;
+        gr[1] = this.domeGround[1] + (FOG_DISPLAY.g - this.domeGround[1]) * cloud;
+        gr[2] = this.domeGround[2] + (FOG_DISPLAY.b - this.domeGround[2]) * cloud;
       }
-      e.setValue(DomeGradient, 'elevationDeg', 32 + 40 * atmosphere.open + 10 * vf);
+      e.setValue(DomeGradient, 'elevationDeg', Math.min(90, 32 + 40 * atmosphere.open + 10 * vf + 58 * Math.max(high, atmosphere.peak)));
     }
     // The canopy-fill hemisphere light: authored (humid green) in the jungle, open-sky blue + warm bounce on the lookout.
     for (const e of this.queries.hemi.entities) {
@@ -125,14 +205,17 @@ export class AtmosphereSystem extends createSystem({
         b = [sky[0], sky[1], sky[2], gr[0], gr[1], gr[2], Number(e.getValue(HemisphereLightComponent, 'intensity'))];
         this.hemiBase.set(e, b);
       }
+      // (Everest's slopes are under the open sky too; above the clouds the bounce is the snow's)
+      const sv = Math.max(vf, atmosphere.peak);
       for (let i = 0; i < 3; i++) {
-        sky[i] = b[i] + (HEMI_SKY_VISTA[i] - b[i]) * vf;
-        gr[i] = b[3 + i] + (HEMI_GROUND_VISTA[i] - b[3 + i]) * vf;
+        sky[i] = b[i] + (HEMI_SKY_VISTA[i] - b[i]) * sv;
+        const g = b[3 + i] + (HEMI_GROUND_VISTA[i] - b[3 + i]) * sv;
+        gr[i] = g + (HEMI_GROUND_HIGH[i] - g) * high;
       }
-      e.setValue(HemisphereLightComponent, 'intensity', b[6] * (1 + (HEMI_INTENSITY_VISTA - 1) * vf));
+      e.setValue(HemisphereLightComponent, 'intensity', b[6] * (1 + (HEMI_INTENSITY_VISTA - 1) * sv));
     }
     // Far plane in 25 m steps (each change touches the projection / XR depth range).
-    const far = Math.round((JUNGLE_FAR + (1000 - JUNGLE_FAR) * atmosphere.open) / 25) * 25;
+    const far = Math.round(Math.max(JUNGLE_FAR + (1000 - JUNGLE_FAR) * atmosphere.open, JUNGLE_FAR + (FAR_HIGH - JUNGLE_FAR) * high) / 25) * 25;
     if (far !== this.world.camera.far) {
       atmosphere.far = far;
       this.world.camera.far = far;

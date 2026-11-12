@@ -103,7 +103,7 @@ export const TREE_SPECS: Record<TreeKind, TreeSpec[]> = { giant: grown('giant', 
 /**
  * Two bare, near-horizontal boughs per tree kind (slender: two as well) at 3-10 m (the lowest, at 3-4 m, is where an animal can be seen at close range without craning the neck). They are defined per KIND with absolute metres,
  * measured from the trunk's axis, and are part of BOTH the detailed and the cheap tree version: the distant forest uses one cheap model per kind
- * (`tree-<kind>-lo`), so a bough that depended on the variant would move at the LOD switch and an animal sitting on it would float.
+ * (`tree-<kind>-<variant>-lo`); the animals look the bough up by KIND, so a bough that depended on the variant would move at the LOD switch and an animal sitting on it would float.
  * `ang` is the bough's direction (rad, tree-local), `len` its length from the axis, `rise` the lift of its tip as a fraction of `len`.
  */
 export interface PerchBough {
@@ -367,12 +367,12 @@ function crownColor(tone: number, seed: number): (p: Vector3, up: number) => Col
 }
 
 /** A limb as a tapering tube; returns its end/mid for sub-branches and crowns. */
-function limb(parts: Part[], start: Vector3, dir: Vector3, len: number, r0: number, rise: number, color: ColorFn, radial: number, segs: number, wind?: WindFn): { end: Vector3; mid: Vector3; at: (t: number) => Vector3 } {
+function limb(parts: Part[] | null, start: Vector3, dir: Vector3, len: number, r0: number, rise: number, color: ColorFn, radial: number, segs: number, wind?: WindFn): { end: Vector3; mid: Vector3; at: (t: number) => Vector3 } {
   const mid = start.clone().addScaledVector(dir, len * 0.5).add(new Vector3(0, len * rise * 0.7, 0));
   const end = start.clone().addScaledVector(dir, len).add(new Vector3(0, len * rise, 0));
   const q = start.clone().lerp(mid, 0.5).add(new Vector3(0, len * 0.04, 0));
   const pts = [start, q, mid, end];
-  parts.push({ geo: solidUV(tubeAlong(pts, (t) => r0 * (1 - 0.82 * t), radial, segs)), color, wind });
+  if (parts) parts.push({ geo: solidUV(tubeAlong(pts, (t) => r0 * (1 - 0.82 * t), radial, segs)), color, wind });
   return { end, mid, at: (t) => (t < 0.5 ? start.clone().lerp(mid, t * 2) : mid.clone().lerp(end, (t - 0.5) * 2)) };
 }
 
@@ -394,9 +394,15 @@ function bromeliad(parts: Part[], m: Matrix4, size: number, rng: () => number): 
   }
 }
 
+/** Size factor of the cheap version's single leaf card per limb (it stands in for the detailed version's three cards plus the sub-limb masses). */
+const LO_CARD = 1.45;
+
 export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi'): Mesh {
   const spec = TREE_SPECS[kind][variant % TREE_SPECS[kind].length];
-  const rng = makeRandom(spec.seed + (lod === 'lo' ? 7 : 0));
+  // ONE random stream for both detail levels: the cheap version makes exactly the same draws and only skips building the detail, so the tree keeps
+  // its limbs, lean and crown masses where they are when the level of detail switches at 30 m (a different seed here made every tree re-grow there).
+  const rng = makeRandom(spec.seed);
+  const hi = lod === 'hi';
   const wood = woodWind(spec.height);
   const leafy = leafWind(spec.height);
   const parts: Part[] = [{ geo: trunkGeometry(spec, lod), color: barkColor(spec), wind: wood }];
@@ -410,17 +416,19 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
   };
 
   // Climbing lianas hugging the trunk (hi only).
-  for (let i = 0; i < (lod === 'hi' ? spec.vines : 0); i++) {
+  for (let i = 0; i < spec.vines; i++) {
     const th0 = rng() * Math.PI * 2;
     const turns = 0.5 + rng() * 0.9;
     const top = spec.height * (0.5 + rng() * 0.25);
+    const rad = 0.045 + rng() * 0.035;
+    const tone = rng();
+    if (!hi) continue;
     const pts: Vector3[] = [];
     for (let k = 0; k <= 8; k++) {
       const t = k / 8;
       pts.push(surface(t * top, th0 + t * turns * Math.PI * 2, 1.04));
     }
-    const rad = 0.045 + rng() * 0.035;
-    parts.push({ geo: solidUV(tubeAlong(pts, (t) => rad * (1.2 - 0.5 * t), 4, 10)), color: lerpColor('#2c4520', '#4a5a2a', rng()), wind: wood });
+    parts.push({ geo: solidUV(tubeAlong(pts, (t) => rad * (1.2 - 0.5 * t), 4, 10)), color: lerpColor('#2c4520', '#4a5a2a', tone), wind: wood });
   }
 
   // Bromeliads lodged on the trunk, above head height (near detail only).
@@ -440,50 +448,57 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
   const tile = spec.crownTile ?? 'clump';
   const arng = makeRandom(spec.seed + 57);
   let aerialLeft = spec.aerial ?? 0;
-  const crowns: { p: Vector3; r: number }[] = [];
-  const nLimbs = lod === 'hi' ? spec.limbs : Math.max(3, Math.round(spec.limbs * 0.55));
-  for (let i = 0; i < nLimbs; i++) {
-    const th = (i / nLimbs) * Math.PI * 2 + rng() * 0.6;
+  const crowns: { p: Vector3; r: number; emit: boolean }[] = [];
+  // The cheap version draws a spread-out subset of the SAME limbs (about 55 %), never limbs of its own.
+  const nLo = Math.min(spec.limbs, Math.max(3, Math.round(spec.limbs * 0.55)));
+  for (let i = 0; i < spec.limbs; i++) {
+    const aerial = aerialLeft > 0 && i % 2 === 0;
+    // a limb that carries an aerial root is always drawn: the root must not hang from nothing
+    const keep = hi || aerial || Math.floor(((i + 1) * nLo) / spec.limbs) > Math.floor((i * nLo) / spec.limbs);
+    const th = (i / spec.limbs) * Math.PI * 2 + rng() * 0.6;
     const h = spec.height * (spec.branchStart + (0.93 - spec.branchStart) * rng() * (1 - 0.45 * flatK));
     const start = surface(h, th, 0.72);
     const len = spec.crown * (0.7 + 0.55 * rng()) * (0.65 + 0.5 * (h / spec.height)) * (1 + 0.25 * flatK);
     const dir = new Vector3(Math.cos(th), 0, Math.sin(th));
     const r0 = Math.max(0.1, trunkRadiusAt(spec, h, th) * 0.32);
-    const L = limb(parts, start, dir, len, r0, 0.1 + 0.2 * rng(), bark, lod === 'hi' ? 4 : 4, lod === 'hi' ? 5 : 3, wood);
-    crowns.push({ p: L.end, r: spec.crown * 0.55 });
-    if (lod === 'hi') {
-      // Sub-limbs fork off the outer half.
-      for (let k = 0; k < 2; k++) {
-        const t = 0.5 + 0.35 * rng();
-        const st = L.at(t);
-        const ang = th + (k ? 0.75 : -0.75) * (0.7 + 0.5 * rng());
-        const sd = new Vector3(Math.cos(ang), 0, Math.sin(ang));
-        const S = limb(parts, st, sd, len * (0.38 + 0.2 * rng()), r0 * 0.45, 0.12 + 0.2 * rng(), bark, 4, 4, wood);
-        crowns.push({ p: S.end, r: spec.crown * 0.4 });
-      }
-      // Hanging lianas from the limb underside.
-      const nh = Math.round(spec.hanging / spec.limbs + rng());
-      for (let k = 0; k < nh; k++) {
-        const at = L.at(0.25 + 0.7 * rng());
-        const drop = 3 + rng() * (spec.height * 0.2);
-        const sway = (rng() - 0.5) * 0.9;
-        const pts = [at.clone(), at.clone().add(new Vector3(sway * 0.3, -drop * 0.35, sway * 0.2)), at.clone().add(new Vector3(sway, -drop * 0.7, -sway * 0.4)), at.clone().add(new Vector3(sway * 0.6, -drop, sway * 0.2))];
-        const swing = lianaWind(at.y, drop, spec.height);
-        parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.035 * (1 - 0.5 * t), 3, 5)), color: lerpColor('#27401c', '#3e5524', rng()), wind: swing });
-        // A trailing leaf card or two near the bottom.
-        const lc = pts[3];
-        const vc = cardGeometry('vine', 1.1 + rng() * 0.7, 0.55, 0.2, 2);
-        parts.push({ geo: vc, m: mat(lc.x, lc.y - 1.0, lc.z, 0, rng() * 6.28, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, rng()), wind: lianaWind(at.y, drop, spec.height, 0, true) });
-      }
+    const L = limb(keep ? parts : null, start, dir, len, r0, 0.1 + 0.2 * rng(), bark, 4, hi ? 5 : 3, wood);
+    crowns.push({ p: L.end, r: spec.crown * 0.55, emit: keep });
+    // Sub-limbs fork off the outer half (near detail; the cheap version keeps their leaf masses, see the crown loop).
+    for (let k = 0; k < 2; k++) {
+      const t = 0.5 + 0.35 * rng();
+      const st = L.at(t);
+      const ang = th + (k ? 0.75 : -0.75) * (0.7 + 0.5 * rng());
+      const sd = new Vector3(Math.cos(ang), 0, Math.sin(ang));
+      const S = limb(hi ? parts : null, st, sd, len * (0.38 + 0.2 * rng()), r0 * 0.45, 0.12 + 0.2 * rng(), bark, 4, 4, wood);
+      crowns.push({ p: S.end, r: spec.crown * 0.4, emit: hi });
+    }
+    // Hanging lianas from the limb underside (near detail).
+    const nh = Math.round(spec.hanging / spec.limbs + rng());
+    for (let k = 0; k < nh; k++) {
+      const at = L.at(0.25 + 0.7 * rng());
+      const drop = 3 + rng() * (spec.height * 0.2);
+      const sway = (rng() - 0.5) * 0.9;
+      const tone = rng();
+      const leafLen = 1.1 + rng() * 0.7;
+      const leafYaw = rng() * 6.28;
+      const leafTone = rng();
+      if (!hi) continue;
+      const pts = [at.clone(), at.clone().add(new Vector3(sway * 0.3, -drop * 0.35, sway * 0.2)), at.clone().add(new Vector3(sway, -drop * 0.7, -sway * 0.4)), at.clone().add(new Vector3(sway * 0.6, -drop, sway * 0.2))];
+      const swing = lianaWind(at.y, drop, spec.height);
+      parts.push({ geo: solidUV(tubeAlong(pts, (t) => 0.035 * (1 - 0.5 * t), 3, 5)), color: lerpColor('#27401c', '#3e5524', tone), wind: swing });
+      // A trailing leaf card or two near the bottom.
+      const lc = pts[3];
+      const vc = cardGeometry('vine', leafLen, 0.55, 0.2, 2);
+      parts.push({ geo: vc, m: mat(lc.x, lc.y - 1.0, lc.z, 0, leafYaw, 0), color: lerpColor(PAL.leafMid, PAL.leafLight, leafTone), wind: lianaWind(at.y, drop, spec.height, 0, true) });
     }
     // Strangler fig: a thick aerial root drops from the limb to the ground and thickens into a prop (both detail levels: it is silhouette).
-    if (aerialLeft > 0 && i % 2 === 0) {
+    if (aerial) {
       aerialLeft--;
       const top = L.at(0.35 + 0.3 * arng());
       const foot = new Vector3(top.x + (arng() - 0.5) * 1.2, -0.3, top.z + (arng() - 0.5) * 1.2);
       const belly = top.clone().lerp(foot, 0.5).add(new Vector3((arng() - 0.5) * 0.6, 0, (arng() - 0.5) * 0.6));
       const rr = 0.07 + 0.06 * arng();
-      parts.push({ geo: solidUV(tubeAlong([top, belly, foot], (t) => rr * (0.8 + 0.9 * t * t), 4, lod === 'hi' ? 6 : 3)), color: bark });
+      parts.push({ geo: solidUV(tubeAlong([top, belly, foot], (t) => rr * (0.8 + 0.9 * t * t), 4, hi ? 6 : 3)), color: bark });
     }
   }
   // Perch boughs (see PERCH_BOUGHS): identical in both detail levels.
@@ -510,16 +525,15 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
   }
   // The leading shoot crowns the trunk.
   trunkCenter(spec, spec.height * 0.97, c);
-  crowns.push({ p: c.clone(), r: spec.crown * 0.6 });
+  crowns.push({ p: c.clone(), r: spec.crown * 0.6, emit: true });
 
   // Crowns: clusters of cutout leaf-clump cards at varied angles (rounded-mass lighting from soft normals).
   const color = crownColor(spec.tone, spec.seed);
   const centre = crowns.reduce((a, k) => a.add(k.p), new Vector3()).multiplyScalar(1 / crowns.length);
   for (const cr of crowns) {
-    const n = lod === 'hi' ? 3 : 1;
-    for (let k = 0; k < n; k++) {
-      const size = cr.r * (1.5 + 0.9 * rng()) * (lod === 'lo' ? 1.45 : 1);
-      const card = crownCard(size, tile);
+    for (let k = 0; k < 3; k++) {
+      // same draws in both detail levels; the cheap version keeps the first (flat) card of each drawn limb, enlarged to stand in for the three
+      const size = cr.r * (1.5 + 0.9 * rng()) * (hi ? 1 : LO_CARD);
       // Orientation mix: tilted flat-ish masses read as canopy layers; vertical ones fill the sides.
       const flat = k % 2 === 0 || (flatK > 0 && rng() < flatK);
       const rx = flat ? -Math.PI / 2 + (rng() - 0.5) * 0.5 : (rng() - 0.5) * 0.5;
@@ -532,6 +546,8 @@ export function createTree(kind: TreeKind, variant: number, lod: TreeLod = 'hi')
       const m = mat(px, py, pz, rx, ry, 0).multiply(mat(0, -size / 2, 0));
       const up = Math.max(0, Math.min(1, (py - (centre.y - spec.crown * 0.5)) / (spec.crown * 1.2)));
       const jitter = 0.85 + 0.3 * rng();
+      if (!(hi || (cr.emit && k === 0))) continue;
+      const card = crownCard(size, tile);
       parts.push({
         geo: card,
         m,

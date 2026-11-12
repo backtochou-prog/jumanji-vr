@@ -136,8 +136,11 @@ const trees = [...P.treePlacements(), ...MP.mountainTrees()];
 // Near trees exist as a detailed class (shown within 46 m) AND a cheap class (shown beyond 30 m);
 // the far wall exists only as the cheap, always-visible class.
 scatter('trees-hi', (p) => `tree-${p.kind}-${p.variant % P.TREE_VARIANTS[p.kind]}`, trees.filter((t) => t.lod === 'hi'));
-scatter('trees-lo', (p) => `tree-${p.kind}-lo`, trees.filter((t) => t.lod === 'hi'));
-scatter('trees-far', (p) => `tree-${p.kind}-lo`, trees.filter((t) => t.lod === 'lo'));
+// The cheap version is the SAME variant as the detailed one (it used to be variant 0 of the kind for every tree: a dark 42 m tree turned into the
+// pale 38 m kapok when it crossed the 30 m hand-off, the most visible pop in the forest).
+const treeId = (p) => `tree-${p.kind}-${p.variant % P.TREE_VARIANTS[p.kind]}`;
+scatter('trees-lo', (p) => `${treeId(p)}-lo`, trees.filter((t) => t.lod === 'hi'));
+scatter('trees-far', (p) => `${treeId(p)}-lo`, trees.filter((t) => t.lod === 'lo'));
 
 // ---- understory, ground layer ----------------------------------------------------
 const MTN_KINDS = new Set(['fern', 'treefern', 'broadleaf', 'shrub', 'palm', 'cover', 'flowers', 'moss', 'litter']);
@@ -252,6 +255,7 @@ nodes.push({ id: 'canopy-fill', name: 'Canopy fill', components: { HemisphereLig
 const eye = (x, z, tx, ty, tz, id, fov = 78) => ({ id, role: 'diagnostic', projection: 'perspective', position: [x, r(groundY(x, z) + 1.65), z], target: [tx, ty, tz], fov });
 const views = [
   { id: 'hero', role: 'hero', projection: 'perspective', position: [L.SPAWN[0], r(groundY(...L.SPAWN) + 1.65), L.SPAWN[1]], target: [4.3, 30, -91], fov: 78 },
+  { id: 'v-everest', role: 'diagnostic', projection: 'perspective', position: [L.START[0], r(L.START_Y + 1.65), L.START[1]], target: [L.SPAWN[0], 60, L.SPAWN[1]], fov: 78 },
   { id: 'v-vista', role: 'diagnostic', projection: 'perspective', position: [L.SPAWN[0], r(groundY(...L.SPAWN) + 1.65), L.SPAWN[1]], target: [2, 22, -91], fov: 70 },
   eye(0.2, 5.5, 0.2, 3, -12, 'v-entrance'),
   eye(0.0, -6.0, -2.2, 2.5, -20, 'v-gate-inside'),
@@ -338,7 +342,8 @@ const scene = {
     shadowMapType: 'pcf',
     fog: { type: 'exponential', color: FOG_COLOR, density: 0.0095 },
   },
-  player: { transform: { position: [L.SPAWN[0], r(groundY(...L.SPAWN)), L.SPAWN[1]], rotationDeg: [0, L.SPAWN_YAW_DEG, 0] } },
+  // the game starts on Everest's summit (world/everest.ts); Overlook Knoll (L.SPAWN) is where its trail arrives
+  player: { transform: { position: [L.START[0], r(L.START_Y), L.START[1]], rotationDeg: [0, L.START_YAW_DEG, 0] } },
   resources: { prefabs },
   authoring: { views },
   nodes,

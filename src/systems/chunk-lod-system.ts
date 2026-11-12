@@ -1,6 +1,6 @@
 import { Box3, createSystem, Mesh, Vector3 } from '@iwsdk/core';
 import type { Object3D } from '@iwsdk/core';
-import { CELL_SIZE, CHUNK_ORIGIN, JUNGLE_LANDMARK_CAP, JUNGLE_LANDMARK_CAP_NAMED, TERRAIN_LOD, VISTA_LANDMARK_OFF, VISTA_LANDMARK_ON, cellDistance, chunkVisible, jungleCellCap, viewCap } from '../world/layout.js';
+import { CELL_SIZE, CHUNK_ORIGIN, EVEREST_LOD, JUNGLE_LANDMARK_CAP, JUNGLE_LANDMARK_CAP_NAMED, TERRAIN_LOD, VISTA_LANDMARK_OFF, VISTA_LANDMARK_ON, cellDistance, chunkVisible, jungleCellCap, viewCap } from '../world/layout.js';
 import { riverPoint } from '../world/mountain.js';
 import { atmosphere } from './atmosphere-system.js';
 import type { ChunkClass } from '../world/layout.js';
@@ -43,6 +43,8 @@ interface Chunk {
 const JUNGLE_LANDMARKS = /^(Terrain_\d+_\d+|Overgrown temple|Temple overgrowth|Ruined spire \(landmark\)|Spire overgrowth|Ancient altar|Ruined pillars|Entrance limb \+ lianas|Pool, stream and puddles|Distant cliff|Distant waterfall|Root arch \(landmark\)|Fallen giant \(landmark\))$/;
 /** Mountain objects that are not cell-batched: drawn only within the mountain cap (26 m in the jungle, growing to 1 km as the view opens), like the mountain terrain. */
 const MOUNTAIN_LANDMARKS = /^(Rope bridge|Gorge river, plunge pool, valley river|Collapse shelf)$/;
+/** Everest's dirt trail ribbons are only drawn this close (m): beyond, the bench in the terrain carries the line. */
+const EVEREST_TRAIL_RANGE = 130;
 const FALL_CENTER = riverPoint(70);
 const FALL_NEAR = 240;
 const MIST_RANGE = 480;
@@ -54,6 +56,10 @@ export class ChunkLodSystem extends createSystem({}) {
   private chunks: Chunk[] = [];
   private tiles: Tile[] = [];
   private roots = new Map<string, Root>();
+  /** Everest (world/everest.ts): the roots the trail crosses (fine tiles near the player, a coarse stand-in beyond), all the stand-ins as one mesh, the trail. */
+  private evRoots = new Map<string, Root>();
+  private evAll: Object3D | null = null;
+  private evTrails: Tile[] = [];
   private far: Object3D[] = [];
   private landmarks: Tile[] = [];
   private mtnLandmarks: Tile[] = [];
@@ -79,6 +85,26 @@ export class ChunkLodSystem extends createSystem({}) {
         if (fm) r.fine.push(o);
         else r.coarse = o;
         this.roots.set(key, r);
+        return;
+      }
+      const ef = /^Everest_(\d+)_(\d+)_\d+$/.exec(o.name);
+      const ec = /^EverestCoarse_(\d+)_(\d+)$/.exec(o.name);
+      if ((ef || ec) && (o as Mesh).isMesh) {
+        const key = `${(ef ?? ec)![1]},${(ef ?? ec)![2]}`;
+        const r = this.evRoots.get(key) ?? { fine: [], coarse: null, x0: EVEREST_LOD.x0 + Number((ef ?? ec)![1]) * EVEREST_LOD.size, z0: EVEREST_LOD.z0 + Number((ef ?? ec)![2]) * EVEREST_LOD.size, near: false };
+        if (ef) r.fine.push(o);
+        else r.coarse = o;
+        this.evRoots.set(key, r);
+        return;
+      }
+      if (o.name === 'EverestCoarse_all') {
+        this.evAll = o;
+        return;
+      }
+      if (/^Everest(?:Trail_\d+|Cairn)$/.test(o.name) && (o as Mesh).isMesh) {
+        const g = (o as Mesh).geometry;
+        if (!g.boundingBox) g.computeBoundingBox();
+        this.evTrails.push({ obj: o, box: g.boundingBox!.clone() });
         return;
       }
       if (/^(Mountain_far|RouteTrail_\d+)$/.test(o.name) && (o as Mesh).isMesh) {
@@ -157,9 +183,21 @@ export class ChunkLodSystem extends createSystem({}) {
     }
     // (landmarks, ridges and far ranges switch with hysteresis too: a bare threshold flashes them while the head sways or the player stands on it)
     // (the ridge rings are also kept on while the vista is on: they carry the horizon of the knoll, whatever `open` says)
+    // (and they are off above Everest's clouds: their crowns would stand in the sea)
+    // (and they sink as the player climbs onto Everest: the rings are the jungle's horizon seen from INSIDE; from the peak's flank, outside and above
+    // them, they are bare upright slabs. Full height on the knoll and at the foot of the trail, gone a little way up.)
+    const high = atmosphere.high;
+    const pk = Math.min(1, Math.max(0, (atmosphere.peak - 0.15) / 0.7));
+    const stand = 1 - pk * pk * (3 - 2 * pk);
     for (const r of this.ridges) {
-      const v = r.visible ? open < 0.55 || vista > VISTA_LANDMARK_OFF : open < 0.45 || vista > VISTA_LANDMARK_ON;
+      const v =
+        (r.visible ? open < 0.55 || vista > VISTA_LANDMARK_OFF : open < 0.45 || vista > VISTA_LANDMARK_ON) && high < (r.visible ? 0.6 : 0.4) && stand > 0.02;
       if (r.visible !== v) r.visible = v;
+      if (v && Math.abs(r.scale.y - stand) > 1e-3) {
+        r.scale.y = stand;
+        r.updateMatrix();
+        r.matrixWorldNeedsUpdate = true;
+      }
     }
     for (const t of this.landmarks) {
       const dx = Math.max(t.box.min.x - this.px, 0, this.px - t.box.max.x);
@@ -176,6 +214,7 @@ export class ChunkLodSystem extends createSystem({}) {
       if (t.obj.visible !== show) t.obj.visible = show;
     }
     for (const f of this.far) {
+      // (never from Everest: they are painted taller than the peak, and nothing may stand above the top of the world; its own Himalaya rings it instead)
       const v = f.visible ? open > 0.2 : open > 0.3;
       if (f.visible !== v) f.visible = v;
     }
@@ -192,6 +231,30 @@ export class ChunkLodSystem extends createSystem({}) {
       for (const f of r.fine) if (f.visible !== (r.near && inRange)) f.visible = r.near && inRange;
       if (r.coarse && r.coarse.visible !== (!r.near && inRange)) r.coarse.visible = !r.near && inRange;
       if (inRange) r.near ? nFine++ : nCoarse++;
+    }
+    // Everest: the same hand-off, always in range (the peak is seen from everywhere). While the player is nowhere near it, ONE mesh stands in for
+    // every root (one draw instead of one per root).
+    let evNear = 0;
+    for (const r of this.evRoots.values()) {
+      const dx = Math.max(r.x0 - this.px, 0, this.px - (r.x0 + EVEREST_LOD.size));
+      const dz = Math.max(r.z0 - this.pz, 0, this.pz - (r.z0 + EVEREST_LOD.size));
+      const d = Math.hypot(dx, dz);
+      r.near = r.coarse ? (r.near ? d < EVEREST_LOD.fine + EVEREST_LOD.hysteresis : d < EVEREST_LOD.fine - EVEREST_LOD.hysteresis) : true;
+      if (r.near) evNear++;
+    }
+    const evSplit = evNear > 0 || !this.evAll;
+    for (const r of this.evRoots.values()) {
+      for (const f of r.fine) if (f.visible !== r.near) f.visible = r.near;
+      if (r.coarse && r.coarse.visible !== (evSplit && !r.near)) r.coarse.visible = evSplit && !r.near;
+      if (r.near) nFine++;
+      else if (evSplit) nCoarse++;
+    }
+    if (this.evAll && this.evAll.visible === evSplit) this.evAll.visible = !evSplit;
+    for (const t of this.evTrails) {
+      const dx = Math.max(t.box.min.x - this.px, 0, this.px - t.box.max.x);
+      const dz = Math.max(t.box.min.z - this.pz, 0, this.pz - t.box.max.z);
+      const show = Math.hypot(dx, dz) <= EVEREST_TRAIL_RANGE + (t.obj.visible ? 10 : -10);
+      if (t.obj.visible !== show) t.obj.visible = show;
     }
     lodInfo.fineRoots = nFine;
     lodInfo.coarseRoots = nCoarse;

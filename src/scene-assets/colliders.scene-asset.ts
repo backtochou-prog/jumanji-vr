@@ -11,8 +11,9 @@
  * + margin of the trail centre-line (tools/validate-scene.mjs proves it).
  */
 import { BoxGeometry, CylinderGeometry, IcosahedronGeometry, Matrix4, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from '@iwsdk/core';
-import { ALTAR, ALTAR_TOP_Y, FALLEN_GIANT, MTN_GUARDS, PILLARS, PILLAR_R, TEMPLE_BASE, ROOT_ARCH, SPIRE, TEMPLE, WALK_LIMIT, HILL, ringOpening, terrainHeight } from '../world/layout.js';
+import { ALTAR, ALTAR_TOP_Y, EVEREST_GUARDS, FALLEN_GIANT, MTN_GUARDS, PILLARS, PILLAR_R, TEMPLE_BASE, ROOT_ARCH, SPIRE, TEMPLE, WALK_LIMIT, HILL, ringOpening, terrainHeight } from '../world/layout.js';
 import { BAKED } from '../world/baked.js';
+import { EVEREST_CAIRN } from '../world/everest.js';
 import { mat, mergeParts } from './lib/geo.js';
 import type { Part } from './lib/geo.js';
 import { templeSolids } from './temple.scene-asset.js';
@@ -48,6 +49,7 @@ export function createColliders(): Mesh {
       const x = HILL.walk.cx + Math.cos(a) * HILL.walk.r;
       const z = HILL.walk.cz + Math.sin(a) * HILL.walk.r;
       if (Math.hypot((x - WALK_LIMIT.cx) / (WALK_LIMIT.rx + 0.6), (z - WALK_LIMIT.cz) / (WALK_LIMIT.rz + 0.6)) < 1) continue; // inside the old ellipse
+      if (ringOpening(x, z)) continue; // the trail from Everest arrives through the back of the knoll here
       const tx = -Math.sin(a) * HILL.walk.r;
       const tz = Math.cos(a) * HILL.walk.r;
       const len = (Math.hypot(tx, tz) * (Math.PI * 2)) / M + 0.4;
@@ -85,9 +87,13 @@ export function createColliders(): Mesh {
   for (const p of PILLARS) cyl(p.x, terrainHeight(p.x, p.z) + p.h / 2, p.z, PILLAR_R, p.h);
   box(ALTAR[0], terrainHeight(ALTAR[0], ALTAR[1]) + (ALTAR_TOP_Y + 0.2) / 2 - 0.1, ALTAR[1], 1.9, ALTAR_TOP_Y + 0.2, 1.9);
 
+  // (the summit cairn on Everest)
+  cyl(EVEREST_CAIRN.x, terrainHeight(EVEREST_CAIRN.x, EVEREST_CAIRN.z) + 0.6, EVEREST_CAIRN.z, EVEREST_CAIRN.r, 1.3);
+
   // Mountain route: guard walls along both sides of the corridor and round the summit platform and the brink terrace,
   // so the player can lean over any drop but never step off it (validated by tools/validate-scene.mjs).
-  for (const w of MTN_GUARDS) parts.push({ geo: new BoxGeometry(w.length, w.y1 - w.y0, 0.5), m: new Matrix4().compose(new Vector3(w.x, (w.y0 + w.y1) / 2, w.z), new Quaternion().setFromAxisAngle(yAxis, w.yaw), new Vector3(1, 1, 1)), color: white });
+  // (+ the Everest trail: both sides of the bench all the way down, and the summit ring)
+  for (const w of [...MTN_GUARDS, ...EVEREST_GUARDS]) parts.push({ geo: new BoxGeometry(w.length, w.y1 - w.y0, 0.5), m: new Matrix4().compose(new Vector3(w.x, (w.y0 + w.y1) / 2, w.z), new Quaternion().setFromAxisAngle(yAxis, w.yaw), new Vector3(1, 1, 1)), color: white });
 
   const mesh = new Mesh(mergeParts(parts), new MeshBasicMaterial({ visible: false }));
   mesh.visible = false;

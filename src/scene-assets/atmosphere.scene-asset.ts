@@ -129,6 +129,9 @@ const MIST_BANKS: [number, number, number, number, number, number][] = [
   [3, -47, 24, 4.5, 0, 1.5], // between the root arch and the clearing
 ];
 
+/** Distance (m) from the eye at which the ground mist reaches its full strength (see createGroundMists). */
+const MIST_NEAR = 20;
+
 /** Ground mist at the gate, the pool and the clearing rim (round discs) plus the valley mist banks, in ONE mesh (world coordinates). */
 export function createGroundMists(): Mesh {
   const unit = createGroundMist().geometry;
@@ -137,7 +140,18 @@ export function createGroundMists(): Mesh {
     [POOL.x + 1.5, POOL.z, 7.5],
     [-1.5, -52, 10],
   ];
-  const items: { geo: BufferGeometry; m: Matrix4; tint?: [number, number, number] }[] = spots.map(([x, z, s]) => ({ geo: unit, m: new Matrix4().compose(new Vector3(x, terrainHeight(x, z) + 0.35, z), new Quaternion(), new Vector3(s, 1, s)) }));
+  // the round discs are DRAPED over the terrain (every vertex 0.35 m above the ground under it): a flat disc on sloping ground is cut by the terrain
+  // in a hard straight line (the gate disc reaches up the knoll ramp)
+  const items: { geo: BufferGeometry; m?: Matrix4; tint?: [number, number, number] }[] = spots.map(([x, z, s]) => {
+    const geo = unit.clone();
+    const pos = geo.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      const wx = x + pos.getX(i) * s;
+      const wz = z + pos.getZ(i) * s;
+      pos.setXYZ(i, wx, terrainHeight(wx, wz) + 0.35, wz);
+    }
+    return { geo };
+  });
   // the banks use a coarse unit disc (16 x 2 = 48 triangles) and a faint warm tint: the low sun gilds them
   const bankUnit = createGroundMist(16, 2).geometry;
   const up = new Vector3(0, 1, 0);
@@ -158,7 +172,11 @@ export function createGroundMists(): Mesh {
       tint: [0.7, 0.62, 0.5],
     });
   }
-  const m = new Mesh(mergeBaked(items), lightShaftMaterial);
+  const merged = mergeBaked(items);
+  // near fade (lightShaftMaterial's optional aNear): full strength from MIST_NEAR metres, gone at 0.45 x that. Seen from the knoll the mist lies in
+  // the valley; walked into, it thins out around the player instead of becoming a milky sheet at knee height that crosses the eye line on the ramp.
+  merged.setAttribute('aNear', new Float32BufferAttribute(new Float32Array(merged.getAttribute('position').count).fill(MIST_NEAR), 1));
+  const m = new Mesh(merged, lightShaftMaterial);
   m.name = 'GroundMists';
   m.renderOrder = 4;
   return m;

@@ -42,10 +42,11 @@ import { createCanopyClump, createPinnacle, createVineCurtain } from './mountain
 import { createTree } from './trees.scene-asset.js';
 import type { TreeKind } from '../world/placements.js';
 
-/** Build the prototype mesh for a baked asset id, e.g. `tree-tall-1`, `tree-giant-lo`, `fern-cluster-2`, `rock-boulder-0`. */
+/** Build the prototype mesh for a baked asset id, e.g. `tree-tall-1`, `tree-giant-0-lo`, `fern-cluster-2`, `rock-boulder-0`. */
 function prototype(id: string): Mesh {
   const [a, b, c] = id.split('-');
-  if (a === 'tree') return createTree(b as TreeKind, c === 'lo' ? 0 : Number(c), c === 'lo' ? 'lo' : 'hi');
+  // `tree-<kind>-<variant>` is the detailed version, `tree-<kind>-<variant>-lo` the cheap version of the SAME tree
+  if (a === 'tree') return createTree(b as TreeKind, Number(c), id.endsWith('-lo') ? 'lo' : 'hi');
   if (a === 'fern') return createFernCluster(Number(c));
   if (a === 'treefern') return createTreeFern(Number(b));
   if (a === 'palm') return createPalm(Number(b));

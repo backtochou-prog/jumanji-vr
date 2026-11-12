@@ -24,8 +24,8 @@ import { fileURLToPath } from 'node:url';
 
 const CHECK = process.argv.includes('--check');
 const BUDGET = {
-  submittedTris: 560_000, // everything the scene contains (the mountain adds a valley, 80+ terrain tiles, ~200 vegetation cells); only a fraction is ever drawn
-  submittedDraws: 340,
+  submittedTris: 625_000, // everything the scene contains (the mountain adds a valley, 80+ terrain tiles, ~200 vegetation cells; Everest ~68k, of which at most ~33k in one view); only a fraction is ever drawn
+  submittedDraws: 400, // (inventory: Everest adds 60 meshes, most of them the fine trail tiles that only exist within 150 m of the player)
   visibleTris: 195_000, // worst jungle viewpoint: the earlier 170k + 16k wildlife reserve (below) + ~6k for the perch boughs now on every tree + margin
   visibleDraws: 116, // worst jungle viewpoint, excludes SDK/UI draws (~10): scene (was 100) + the wildlife reserve below
   mtnTris: 170_000, // worst mountain viewpoint (the overlooks see a whole valley; the far field is merged and distance-capped)
@@ -184,6 +184,8 @@ try {
   let LOW = false; // evaluate the 'low' tier rules
   /** asset id -> scene node name, for the per-name landmark caps of the knoll vista (JUNGLE_LANDMARK_CAP_NAMED) */
   const LANDMARK_NODE = { cliff: 'Distant cliff', waterfall: 'Distant waterfall', water: 'Pool, stream and puddles', temple: 'Overgrown temple', 'temple-growth': 'Temple overgrowth' };
+  /** the Everest roots that have a coarse stand-in ("ri_rj") */
+  const EV_ROOTS = new Set(draws.map((d) => d.mesh && /^EverestCoarse_(\d+)_(\d+)$/.exec(d.mesh)).filter(Boolean).map((m) => `${m[1]}_${m[2]}`));
   const visible = (cam, d) => {
     // Distance LOD rules (shared with the runtime ChunkLodSystem).
     const open = cam.open ?? 0;
@@ -195,6 +197,28 @@ try {
       if (!L.chunkVisible(d.chunk.cls, L.cellDistance(cam.p[0], cam.p[2], d.chunk.ix, d.chunk.iz, size), LOW, mountainCell ? Math.min(L.viewCap(open), mtnCap) : Math.min(L.viewCap(open), L.jungleCellCap(LOW ? 0 : (cam.vista ?? 0) * (1 - open))))) return false;
     }
     if (/^far-range/.test(d.name) && open <= 0.25) return false;
+    {
+      // Everest (ChunkLodSystem): fine tiles within 150 m of their root; the per-root stand-ins only while some root is near, else ONE merged mesh;
+      // the trail ribbons and the summit cairn within 130 m. `Everest_far_n|w|e` are always drawn (frustum culled).
+      const em = d.mesh && /^(?:Everest_(\d+)_(\d+)_\d+|EverestCoarse_(\d+)_(\d+))$/.exec(d.mesh);
+      if (em || d.mesh === 'EverestCoarse_all') {
+        if (!cam.evNear) {
+          cam.evNear = new Set();
+          for (const k of EV_ROOTS) {
+            const [ri, rj] = k.split('_').map(Number);
+            const x0 = L.EVEREST_LOD.x0 + ri * L.EVEREST_LOD.size, z0 = L.EVEREST_LOD.z0 + rj * L.EVEREST_LOD.size;
+            if (Math.hypot(Math.max(x0 - cam.p[0], 0, cam.p[0] - (x0 + L.EVEREST_LOD.size)), Math.max(z0 - cam.p[2], 0, cam.p[2] - (z0 + L.EVEREST_LOD.size))) < L.EVEREST_LOD.fine) cam.evNear.add(k);
+          }
+        }
+        if (d.mesh === 'EverestCoarse_all') { if (cam.evNear.size > 0) return false; }
+        else {
+          const near = cam.evNear.has(`${em[1] ?? em[3]}_${em[2] ?? em[4]}`);
+          if (em[1] !== undefined ? !near : near || cam.evNear.size === 0) return false;
+        }
+      }
+      if (d.mesh && /^Everest(?:Trail_\d+|Cairn)$/.test(d.mesh) && Math.hypot(d.x - cam.p[0], d.z - cam.p[2]) - d.r > 130) return false;
+    }
+    if (/^ridge-\d$/.test(d.name) && (cam.high ?? 0) >= 0.5) return false; // above Everest's clouds
     if (d.name === 'giant-fall' || d.name === 'fall-mist') {
       const fd = Math.hypot(d.x - 187, d.z + 168); // the fall's centre (riverPoint(70))
       if (d.name === 'fall-mist' && (LOW || fd > 480)) return false;
@@ -229,8 +253,22 @@ try {
   const SKYM = await server.ssrLoadModule('/src/scene-assets/sky.scene-asset.ts');
   const triCount = (g) => g.index.count / 3;
   const SKY = { clouds: triCount(SKYM.createSkyClouds()), glow: triCount(SKYM.createSkyGlow()) };
-  const skyReserve = (cam) => (cam ? { tris: LOW ? SKY.glow : SKY.clouds + SKY.glow, draws: LOW ? 1 : 2 } : { tris: 0, draws: 0 });
-  console.log(`   sky pack (runtime, 1 material outside the manifest): clouds ${SKY.clouds} + haze/sun ${SKY.glow} triangles, 2 draws`);
+  // Everest's cloud meshes (EverestSystem, runtime, 2 materials outside the manifest): the collar is drawn from below the deck (the estimate counts it
+  // whenever the peak is ahead: its sphere is the deck ring), the sea of clouds + the Himalaya from above it (never frustum culled). One or the other.
+  const EVSKY = await server.ssrLoadModule('/src/scene-assets/everest-sky.scene-asset.ts');
+  const EVC = { collar: triCount(EVSKY.createEverestCollar()), sea: triCount(EVSKY.createEverestSea()) };
+  const everestReserve = (cam) => {
+    if (cam.p[1] > L.EVEREST.deck - 2) return { tris: EVC.sea, draws: 1 };
+    const d = { x: L.EVEREST.x, y: L.EVEREST.deck, z: L.EVEREST.z, r: 240, name: 'everest-collar' };
+    return visible(cam, d) ? { tris: EVC.collar, draws: 1 } : { tris: 0, draws: 0 };
+  };
+  const skyReserve = (cam) => {
+    if (!cam) return { tris: 0, draws: 0 };
+    const e = everestReserve(cam);
+    return { tris: (LOW ? SKY.glow : SKY.clouds + SKY.glow) + e.tris, draws: (LOW ? 1 : 2) + e.draws };
+  };
+  console.log(`   Everest clouds (runtime, 2 materials outside the manifest): collar ${EVC.collar} triangles (below the deck), sea + Himalaya ${EVC.sea} (above), 1 draw`);
+  console.log(`   sky pack (runtime, 2 materials outside the manifest): clouds ${SKY.clouds} + haze/sun ${SKY.glow} triangles, 2 draws`);
   const views = [];
   const N = L.PATH_SAMPLES.length;
   const addView = (name, x, z, yaw, pitch = 0) => { const cam = planes(x, L.terrainHeight(x, z) + 1.65, z, yaw, pitch); cam.vista = L.vistaAt(x, z); views.push({ name, cam }); };
@@ -254,6 +292,15 @@ try {
     const cam = planes(v.x, v.y + 1.65, v.z, (-v.yawDeg * Math.PI) / 180, (v.pitchDeg * Math.PI) / 180);
     cam.far = L.JUNGLE_FAR + (1000 - L.JUNGLE_FAR) * open;
     cam.open = open;
+    views.push({ name: `MTN ${id}`, cam });
+  }
+  // Everest stations: jungle air and far plane below the cloud deck, 1.5 km of clear air above it (AtmosphereSystem). Budgeted with the mountain views.
+  for (const [id, v] of Object.entries(L.EVEREST_VIEWS)) {
+    const eye = v.y + 1.65;
+    const cam = planes(v.x, eye, v.z, (-v.yawDeg * Math.PI) / 180, ((v.pitchDeg ?? 0) * Math.PI) / 180);
+    cam.high = L.smoothstep(L.EVEREST.deck - 2, L.EVEREST.deck + 16, eye);
+    cam.far = L.JUNGLE_FAR + (1500 - L.JUNGLE_FAR) * cam.high;
+    cam.vista = L.vistaAt(v.x, v.z);
     views.push({ name: `MTN ${id}`, cam });
   }
   console.log('\n4. visible estimate from standing viewpoints (CPU frustum test, 96x90 deg, far plane per AtmosphereSystem)');

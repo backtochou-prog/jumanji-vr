@@ -621,5 +621,107 @@ console.log('7. mountain: route, edges, reachability (intact + collapsed), bridg
   }
 }
 
+// ---------------------------------------------------------------------------
+// 8. EVEREST: the start on the summit, the trail down to Overlook Knoll
+// ---------------------------------------------------------------------------
+console.log('8. everest: start on the summit, trail to the knoll, guard walls, viewpoints');
+{
+  const R = L.EV;
+  const E = L.EVEREST;
+  const PRM = 0.5;
+  const STEP = 0.45;
+  const CELLM = 0.5;
+  const put = (map, k, v) => (map.get(k) ?? map.set(k, []).get(k)).push(v);
+  const bk = (x, z) => `${Math.floor(x / 4)},${Math.floor(z / 4)}`;
+  const wallB = new Map();
+  for (const w of L.EVEREST_GUARDS) for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) put(wallB, `${Math.floor(w.x / 4) + i},${Math.floor(w.z / 4) + j}`, w);
+  const blocked = (x, z, h) => {
+    for (const w of wallB.get(bk(x, z)) ?? []) {
+      if (h < w.y0 - 0.2 || h > w.y1) continue;
+      const dx = x - w.x, dz = z - w.z;
+      const lx = dx * Math.cos(w.yaw) - dz * Math.sin(w.yaw);
+      const lz = dx * Math.sin(w.yaw) + dz * Math.cos(w.yaw);
+      if (Math.abs(lx) < w.length / 2 + PRM * 0.2 && Math.abs(lz) < M.GUARD_THICK / 2 + PRM) return true;
+    }
+    return false;
+  };
+  // the start
+  {
+    const g = L.terrainHeight(L.START[0], L.START[1]);
+    const top = Math.max(...[...Array(64)].flatMap((_, i) => [...Array(40)].map((__, j) => L.terrainHeight(E.x + Math.cos((i / 64) * 6.2832) * j * 10, E.z + Math.sin((i / 64) * 6.2832) * j * 10))));
+    if (Math.abs(g - L.START_Y) > 0.05) err(`the start stands at y ${L.START_Y.toFixed(2)} but the ground there is ${g.toFixed(2)}`);
+    else if (top > g + 0.3) err(`the start (${g.toFixed(1)} m) is not the highest ground of the peak (${top.toFixed(1)} m)`);
+    else ok(`start on the summit (${L.START[0].toFixed(1)}, ${L.START[1].toFixed(1)}), feet at ${L.START_Y.toFixed(1)} m: the highest ground of the world (east mountain summit ${M.SUMMIT.y.toFixed(0)} m), ${(L.START_Y - E.deck).toFixed(0)} m above the cloud deck`);
+    for (const o of [...boxes.map((b) => ({ x: b.x, z: b.z, r: Math.hypot(b.w, b.d) / 2 })), ...circles]) if (Math.hypot(o.x - L.START[0], o.z - L.START[1]) < o.r + 1) err(`a collider stands on the start point (${o.x.toFixed(1)}, ${o.z.toFixed(1)})`);
+  }
+  // grades
+  {
+    let worst = { g: 0, s: 0 };
+    let prev = R.samples[0];
+    for (const q of R.samples) {
+      const d = Math.hypot(q.x - prev.x, q.z - prev.z);
+      if (d > 0.5) { const g = Math.abs(q.y - prev.y) / d; if (g > worst.g) worst = { g, s: q.s }; prev = q; }
+    }
+    let off = 0;
+    // (the last metres blend onto the knoll's own ground: not compared)
+    for (const q of R.samples) if (Math.hypot(q.x - L.HILL.walk.cx, q.z - L.HILL.walk.cz) > L.HILL.walk.r + 1) off = Math.max(off, Math.abs(L.terrainHeight(q.x, q.z) - q.y));
+    if (worst.g > 0.45) err(`Everest trail grade ${worst.g.toFixed(2)} at s=${worst.s.toFixed(0)} exceeds 0.45`);
+    else if (off > 0.25) err(`the ground under the Everest trail is ${off.toFixed(2)} m off the route profile`);
+    else ok(`trail ${R.length.toFixed(0)} m (${(R.length / 1.8 / 60).toFixed(1)} min at walking speed), ${(L.START_Y - R.samples[R.samples.length - 1].y).toFixed(0)} m of descent, steepest grade ${worst.g.toFixed(2)} (${(Math.atan(worst.g) * 57.3).toFixed(0)} deg) at s=${worst.s.toFixed(0)}; ground within ${off.toFixed(2)} m of the profile`);
+  }
+  // flood fill from the start: down to the knoll, never out of the corridor, never off a drop
+  {
+    const seen = new Set();
+    const i0 = Math.round(L.START[0] / CELLM), j0 = Math.round(L.START[1] / CELLM);
+    const q = [[i0, j0, L.terrainHeight(i0 * CELLM, j0 * CELLM)]];
+    seen.add(`${i0},${j0}`);
+    const drops = [];
+    const leaks = [];
+    const nodes = [];
+    let arrived = 0;
+    let reached = 0;
+    for (let h = 0; h < q.length && q.length < 400000; h++) {
+      const [i, j, ch] = q[h];
+      const x = i * CELLM, z = j * CELLM;
+      nodes.push([x, z, ch]);
+      // inside the knoll's walk disc: sections 4 - 5b take over
+      if (Math.hypot(x - L.HILL.walk.cx, z - L.HILL.walk.cz) <= L.HILL.walk.r - 1.2) { arrived++; continue; }
+      const hit = M.routeNear(R, x, z);
+      if (hit.dist < 1.5 && hit.s > reached) reached = hit.s;
+      if (hit.dist > E.hw + 1.6 && Math.hypot(x - E.x, z - E.z) > E.platform + 0.6) leaks.push(`(${x.toFixed(1)}, ${z.toFixed(1)}) ${hit.dist.toFixed(1)} m from the trail`);
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ni = i + di, nj = j + dj, nx = ni * CELLM, nz = nj * CELLM;
+        const g = L.terrainHeight(nx, nz);
+        if (Math.abs(g - ch) <= STEP && Math.abs(g - ch) / CELLM <= 0.8) {
+          if (blocked(nx, nz, g)) continue;
+          const k = `${ni},${nj}`;
+          if (!seen.has(k)) { seen.add(k); q.push([ni, nj, g]); }
+        } else if (g < ch - 1.0 && !blocked(nx, nz, ch)) drops.push(`(${nx.toFixed(1)}, ${nz.toFixed(1)}) ${(ch - g).toFixed(1)} m below (${x.toFixed(1)}, ${z.toFixed(1)})`);
+      }
+    }
+    if (!arrived) {
+      const nxt = R.samples.find((p) => p.s > reached + 0.5);
+      err(`the walk down from the summit stops at s=${reached.toFixed(1)} of ${R.length.toFixed(0)}${nxt ? ` (next point (${nxt.x.toFixed(1)}, ${nxt.z.toFixed(1)}), ground ${L.terrainHeight(nxt.x, nxt.z).toFixed(2)} vs route ${nxt.y.toFixed(2)})` : ''}`);
+    } else ok(`from the summit the whole trail is walkable down onto Overlook Knoll (${nodes.length} walkable cells, capsule 0.5 m, step 0.45 m)`);
+    if (leaks.length) err(`${leaks.length} reachable cell(s) outside the guarded corridor, e.g. ${leaks.slice(0, 3).join('; ')}`);
+    else ok('the guard walls keep the player on the trail: no reachable cell further than 3.3 m from its centre line');
+    if (drops.length) err(`${drops.length} unguarded drop-off(s) on Everest, e.g. ${drops.slice(0, 3).join('; ')}`);
+    else ok('no unguarded drop-off: every free neighbour of every reachable cell is walkable or walled');
+    let bad = 0;
+    for (const [id, v] of Object.entries(L.EVEREST_VIEWS)) {
+      const g = L.terrainHeight(v.x, v.z);
+      if (Math.abs(g - v.y) > 0.5) { bad++; err(`viewpoint ${id}: feet at y ${v.y.toFixed(2)} but the ground is ${g.toFixed(2)}`); }
+      else if (!nodes.some(([nx, nz, nh]) => Math.hypot(nx - v.x, nz - v.z) <= 1.2 && Math.abs(nh - v.y) < 1.2)) { bad++; err(`viewpoint ${id} at (${v.x.toFixed(1)}, ${v.z.toFixed(1)}) is not reachable from the summit`); }
+    }
+    if (!bad) ok(`${Object.keys(L.EVEREST_VIEWS).length} viewpoints (${Object.keys(L.EVEREST_VIEWS).join(', ')}) stand on reachable ground`);
+  }
+  // nothing grows or stands in the trail
+  {
+    const hits = [...circles, ...boxes.map((b) => ({ x: b.x, z: b.z, r: Math.max(b.w, b.d) / 2 }))].filter((c) => c.z > 41 && M.routeNear(R, c.x, c.z).dist < c.r + E.hw);
+    if (hits.length) err(`${hits.length} collider(s) stand in the Everest trail, e.g. (${hits[0].x.toFixed(1)}, ${hits[0].z.toFixed(1)})`);
+    else ok('no trunk, rock or ruin stands in the trail');
+  }
+}
+
 console.log(`\n${errors ? 'FAILED' : 'PASSED'}: ${errors} error(s), ${warnings} warning(s)`);
 process.exit(errors ? 1 : 0);

@@ -13,8 +13,10 @@
  *   surrounding splat (no hard outline), with mud patches and worn centre.
  * Both use ONE material (`groundMaterial`, anti-tiling albedo).
  */
-import { BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, Uint32BufferAttribute } from '@iwsdk/core';
+import { BufferGeometry, Color, CylinderGeometry, DodecahedronGeometry, Float32BufferAttribute, Group, Mesh, PlaneGeometry, Uint32BufferAttribute } from '@iwsdk/core';
 import {
+  EV,
+  EVEREST_LOD,
   MTN,
   MUD_PATCHES,
   TERRAIN_LOD,
@@ -30,9 +32,12 @@ import {
   terrainHeight,
 } from '../world/layout.js';
 import { GEO, MTN_MUD, VALLEY, fallWetness, mountainTiles, mountainWeight, routeNear } from '../world/mountain.js';
+import { EVEREST, EVEREST_CAIRN, everestSnowAt, everestTiles, everestWeight } from '../world/everest.js';
 import { MEADOW, PAL, SUN_DIR } from '../world/palette.js';
 import { BAKED } from '../world/baked.js';
 import { groundMaterial, mountainGroundMaterial } from './lib/materials.js';
+import { mat, mergeParts } from './lib/geo.js';
+import type { Part } from './lib/geo.js';
 
 const C = {
   soil: new Color(PAL.soil),
@@ -54,6 +59,14 @@ const R = {
   cliffWet: new Color(PAL.cliffWet),
   scree: new Color(PAL.scree),
   forest: new Color(PAL.valleyForest),
+};
+/** Everest: alpine meadow above the tree line, pale scree, the tan "Yellow Band" under the summit, snow (the shader lays the real snow per pixel). */
+const EVC = {
+  meadow: new Color('#7c8a4e'),
+  meadowDry: new Color('#9c9460'),
+  scree: new Color('#a39c8e'),
+  band: new Color('#c4a56c'),
+  snow: new Color('#e6edf5'),
 };
 const TINT = {
   entrance: new Color(0.8, 0.92, 0.96),
@@ -210,6 +223,31 @@ function mountainTint(x: number, z: number, y: number, slope: number, out: Color
   out.lerp(C.mossDeep, wet * (1 - rockness) * 0.5);
 }
 
+const ev = new Color();
+/**
+ * Everest's ground (vertex colour, blended over the jungle splat by `ew`): the dark forest floor of the foot gives way to alpine meadow (~35 - 80 m),
+ * then scree and banded rock (the east mountain's strata, lighter and greyer with height, with a tan band at 150 - 168 m), then snow.
+ */
+function everestTint(x: number, z: number, y: number, slope: number, ew: number, out: Color): void {
+  const n = fbm(x * 0.02, z * 0.02, 94, 2);
+  const yy = y + (n - 0.5) * 30;
+  const alp = smoothstep(30, 74, yy);
+  ev.copy(R.forest).lerp(C.grass, 0.25 * (1 - alp)).lerp(EVC.meadow, alp).lerp(EVC.meadowDry, alp * smoothstep(0.42, 0.72, fbm(x * 0.09, z * 0.09, 95, 2)));
+  const rockness = Math.max(smoothstep(0.5, 1.0, slope), smoothstep(66, 118, yy) * 0.9);
+  if (rockness > 0) {
+    const band = 0.5 + 0.5 * Math.sin(y * 0.9 + fbm(x * 0.05, z * 0.05, 82, 2) * 5.0);
+    const fine = 0.5 + 0.5 * Math.sin(y * 3.1 + fbm(x * 0.2, z * 0.2, 83, 2) * 3.0);
+    const streak = fbm(x * 1.7 + z * 1.3, y * 0.07, 84, 2);
+    mt.copy(R.cliff).lerp(R.cliffDark, band * 0.5 + smoothstep(0.55, 0.9, streak) * 0.3).lerp(R.cliffWarm, smoothstep(0.55, 0.85, fine) * 0.3 * (1 - band));
+    mt.lerp(EVC.scree, (1 - smoothstep(0.55, 1.0, slope)) * 0.6);
+    const yb = y + (fbm(x * 0.03, z * 0.03, 96, 2) - 0.5) * 14;
+    mt.lerp(EVC.band, smoothstep(148, 153, yb) * (1 - smoothstep(163, 169, yb)) * 0.7);
+    ev.lerp(mt, rockness);
+  }
+  ev.lerp(EVC.snow, everestSnowAt(x, z, y, slope));
+  out.lerp(ev, ew);
+}
+
 const mdw = new Color();
 const mdwFlower = new Color();
 
@@ -270,7 +308,10 @@ export function groundColor(x: number, z: number, slope: number, out: Color = tm
   if (hw > 0.001) meadowGround(x, z, b, n, lit, out);
   const mw = mountainWeight(x, z);
   if (mw > 0.02) mountainTint(x, z, y, slope, out);
-  out.multiplyScalar(bakedAO(x, z) * curv * (mw > 0.02 ? 1 : crownShade(x, z, hw)));
+  const ew = everestWeight(x, z);
+  if (ew > 0.001) everestTint(x, z, y, slope, ew, out);
+  // (no crown shade on the mountains: the east mountain has its own canopy bake, Everest is bare)
+  out.multiplyScalar(bakedAO(x, z) * curv * (mw > 0.02 ? 1 : 1 - (1 - crownShade(x, z, hw)) * (1 - ew)));
   return out;
 }
 
@@ -295,7 +336,7 @@ function tileCell(x0: number, z0: number, x1: number, z1: number): number {
  * sheet. The same displaced mesh is what locomotion collides with. Faded out near the route.
  */
 function crag(pos: Float32Array, k: number, x: number, z: number, y: number, dhx: number, dhz: number, slope: number): void {
-  const near = routeNear(MTN, x, z).dist;
+  const near = z > EVEREST.z0 ? routeNear(EV, x, z).dist : routeNear(MTN, x, z).dist;
   const fade = smoothstep(4.5, 9, near) * smoothstep(1.1, 1.8, slope);
   if (fade <= 0) return;
   const hl = Math.hypot(dhx, dhz) || 1;
@@ -453,7 +494,8 @@ function createTrailGeometry(samples: RibbonSample[], mountain = false): BufferG
       const wobble = (fbm(px * 0.8 + j * 3.1, pz * 0.8, 33, 2) - 0.5) * 0.3;
       const x = px + sx * (u * hw + wobble);
       const z = pz + sz * (u * hw + wobble);
-      // Lifted 7.5 cm: the terrain tiles interpolate linearly between their samples and would poke through a flush ribbon.
+      // Lifted 7.5 cm: the terrain tiles interpolate linearly between their samples and would poke through a flush ribbon. (The two rim columns are
+      // tucked under the ground after the normals are computed: see below.)
       const y = terrainHeight(x, z) + 0.075;
       positions.push(x, y, z);
       uvs.push(x / 2.5, z / 2.5);
@@ -470,7 +512,8 @@ function createTrailGeometry(samples: RibbonSample[], mountain = false): BufferG
       // the trail lies in the same crown shadows as the floor beside it: shade the dirt once, BEFORE blending in g2 (groundColor already applies the shade to g2)
       if (!mountain) c.multiplyScalar(crownShade(x, z, hillWeight(x, z)));
       groundColor(x, z, 0.1, g2, y);
-      c.lerp(g2, smoothstep(0.55, 1.0, edge));
+      // (pure ground colour from the second column outwards: that is where the ribbon meets the terrain, see the rim below)
+      c.lerp(g2, smoothstep(0.52, 0.8, edge));
       colors.push(c.r, c.g, c.b);
     }
   }
@@ -495,6 +538,13 @@ function createTrailGeometry(samples: RibbonSample[], mountain = false): BufferG
     }
     g.setIndex(indices);
     g.computeVertexNormals();
+  }
+  // The two rim columns go 4 cm UNDER the ground, so the ribbon rises out of the terrain along a line where both surfaces are at the same height. A
+  // lifted rim was a 7.5 cm step: the world-projected ground photo jumped by its parallax there (a straight seam cutting the leaves in half). The
+  // normals stay those of the evenly lifted ribbon, so the tucked strip is lit like the ground it sinks into.
+  const pos = g.getAttribute('position');
+  for (let i = 0; i < rows; i++) {
+    for (const j of [0, cols - 1]) pos.setY(i * cols + j, pos.getY(i * cols + j) - 0.115);
   }
   g.computeBoundingSphere();
   g.computeBoundingBox();
@@ -535,6 +585,224 @@ function mountainRibbons(): Mesh[] {
   }
   flush();
   return out;
+}
+
+/**
+ * Height of Everest's DRAWN surface (which is also the walked one): the 2 m lattice of the fine tiles the trail runs on (`everestTiles`: every tile
+ * within 7 m of the route), split along the same diagonal as `buildTile`. The terrain function itself has a flat bench there, which a 2 m lattice
+ * cannot follow on a steep flank: a ribbon draped on the function is buried on the uphill side and floats on the other. North of the lattice (the
+ * last metres down to the knoll, on the jungle's 1.25 m tiles and gentle ground) the function is close enough.
+ */
+const evLattice = new Map<number, number>();
+function everestMeshHeight(x: number, z: number): number {
+  const E = EVEREST_LOD;
+  if (z < E.z0 + 0.01) return terrainHeight(x, z);
+  const fx = (x - E.x0) / 2;
+  const fz = (z - E.z0) / 2;
+  const i = Math.floor(fx);
+  const j = Math.floor(fz);
+  const u = fx - i;
+  const v = fz - j;
+  const h = (ii: number, jj: number): number => {
+    const k = jj * 8192 + ii;
+    let y = evLattice.get(k);
+    if (y === undefined) {
+      y = terrainHeight(E.x0 + ii * 2, E.z0 + jj * 2);
+      evLattice.set(k, y);
+    }
+    return y;
+  };
+  const h10 = h(i + 1, j);
+  const h01 = h(i, j + 1);
+  if (u + v <= 1) {
+    const h00 = h(i, j);
+    return h00 + u * (h10 - h00) + v * (h01 - h00);
+  }
+  const h11 = h(i + 1, j + 1);
+  return h11 + (1 - u) * (h01 - h11) + (1 - v) * (h10 - h11);
+}
+
+/**
+ * One stretch of the Everest trail: a trodden line on the peak's own ground material (the snow, the scree and the fog exemption are the terrain's, per
+ * pixel). Seven columns, a row per metre, draped on the drawn mesh and lifted 9 cm (the rim columns are tucked 4 cm under it). Below the snow the line is
+ * worn, dusty ground (vertex colour); in the snow the shader packs it down wherever `aPacked` (1 on the centre line, 0 at the rim) says so.
+ */
+function createEverestTrailGeometry(samples: RibbonSample[]): BufferGeometry {
+  const cols = 7;
+  const rows = samples.length;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const colors: number[] = [];
+  const uvs: number[] = [];
+  const packed: number[] = [];
+  const indices: number[] = [];
+  const worn = new Color('#9a8a6e');
+  const wornDark = new Color('#6f6250');
+  const c = new Color();
+  const g2 = new Color();
+  for (let i = 0; i < rows; i++) {
+    const { x: px, z: pz } = samples[i];
+    const { x: nx, z: nz } = samples[Math.min(rows - 1, i + 1)];
+    const { x: bx, z: bz } = samples[Math.max(0, i - 1)];
+    const tx = nx - bx;
+    const tz = nz - bz;
+    const tl = Math.hypot(tx, tz) || 1;
+    const sx = -tz / tl;
+    const sz = tx / tl;
+    const hw = samples[i].hw * (0.92 + 0.16 * fbm(px * 0.4, pz * 0.4, 31, 2));
+    // the terrain's own (smooth) normal and slope at the centre line: the ribbon is lit and coloured like the bench it lies on
+    const dhx = (terrainHeight(px + 2, pz) - terrainHeight(px - 2, pz)) / 4;
+    const dhz = (terrainHeight(px, pz + 2) - terrainHeight(px, pz - 2)) / 4;
+    const il = 1 / Math.hypot(dhx, 1, dhz);
+    const slope = Math.hypot(dhx, dhz);
+    for (let j = 0; j < cols; j++) {
+      const u = (j / (cols - 1)) * 2 - 1;
+      const edge = Math.abs(u);
+      const wobble = (fbm(px * 0.8 + j * 3.1, pz * 0.8, 33, 2) - 0.5) * 0.24;
+      const x = px + sx * (u * hw + wobble);
+      const z = pz + sz * (u * hw + wobble);
+      const rim = j === 0 || j === cols - 1;
+      const y = everestMeshHeight(x, z) + (rim ? -0.04 : 0.09);
+      positions.push(x, y, z);
+      normals.push(-dhx * il, il, -dhz * il);
+      uvs.push(x / 2.5, z / 2.5);
+      const blotch = fbm(x * 0.9, z * 0.9, 35, 3);
+      groundColor(x, z, slope, g2, y);
+      c.copy(worn).lerp(wornDark, smoothstep(0.4, 0.8, blotch) * 0.6).lerp(g2, 0.35);
+      c.lerp(g2, smoothstep(0.4, 0.92, edge));
+      colors.push(c.r, c.g, c.b);
+      packed.push((1 - smoothstep(0.3, 0.95, edge)) * (0.8 + 0.2 * blotch));
+    }
+  }
+  for (let i = 0; i < rows - 1; i++) {
+    for (let j = 0; j < cols - 1; j++) {
+      const a = i * cols + j;
+      indices.push(a, a + 1, a + cols, a + 1, a + cols + 1, a + cols);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  g.setAttribute('normal', new Float32BufferAttribute(normals, 3));
+  g.setAttribute('color', new Float32BufferAttribute(colors, 3));
+  g.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  g.setAttribute('aPacked', new Float32BufferAttribute(packed, 1));
+  // (the faces must look up, whichever hand the stretch turns to)
+  const pa = positions;
+  const [ia, ib, ic] = indices;
+  const ny = (pa[ib * 3 + 2] - pa[ia * 3 + 2]) * (pa[ic * 3] - pa[ia * 3]) - (pa[ib * 3] - pa[ia * 3]) * (pa[ic * 3 + 2] - pa[ia * 3 + 2]);
+  if (ny < 0) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const t = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = t;
+    }
+  }
+  g.setIndex(indices);
+  g.computeBoundingSphere();
+  g.computeBoundingBox();
+  return g;
+}
+
+/** The Everest trail (a trodden line through the meadow, the scree and the snow), from just off the summit platform to the knoll's own trail. */
+function everestRibbons(): Mesh[] {
+  const out: Mesh[] = [];
+  let run: RibbonSample[] = [];
+  let k = 0;
+  const flush = () => {
+    if (run.length > 3) {
+      const m = new Mesh(createEverestTrailGeometry(run), mountainGroundMaterial);
+      m.name = `EverestTrail_${k++}`;
+      m.receiveShadow = true;
+      out.push(m);
+    }
+    run = [];
+  };
+  for (const q of EV.samples) {
+    if (q.s < EVEREST.platform - 1) continue;
+    run.push({ x: q.x, z: q.z, hw: q.hw * 0.82 });
+    if (run.length >= 60) {
+      const last = run[run.length - 1];
+      flush();
+      run.push(last);
+    }
+  }
+  flush();
+  evLattice.clear();
+  return out;
+}
+
+/**
+ * The summit cairn: a pile of frost-split stones, a pole and three strings of prayer flags (blue, white, red, green, yellow: sky, air, fire, water,
+ * earth). One mesh on the peak's own ground material, so it costs one draw and no new material or program: the shader dusts the stones' tops with
+ * snow and leaves the upright cloth bare (its rock tone on a steep face only weathers the colours, which are authored over-bright for that).
+ */
+function everestCairn(): Mesh {
+  const K = EVEREST_CAIRN;
+  const y0 = terrainHeight(K.x, K.z);
+  const parts: Part[] = [];
+  const rnd = (i: number, k: number): number => fbm(K.x + i * 7.31 + k * 3.7, K.z - i * 4.13 + k * 1.9, 71, 1);
+  // (over-bright: the material multiplies vertex colours by its dark rock tone)
+  const stone = [new Color(1.5, 1.45, 1.36), new Color(1.25, 1.2, 1.14), new Color(1.7, 1.62, 1.5), new Color(1.1, 1.08, 1.04)];
+  const layers = [
+    [6, 0.44, 0.3, 0.14],
+    [5, 0.3, 0.26, 0.38],
+    [3, 0.17, 0.22, 0.6],
+    [1, 0, 0.21, 0.8],
+  ];
+  let n = 0;
+  for (const [count, ring, size, y] of layers) {
+    for (let i = 0; i < count; i++, n++) {
+      const a = (i / count) * Math.PI * 2 + rnd(n, 1) * 2.4;
+      const s = size * (0.85 + 0.4 * rnd(n, 2));
+      parts.push({
+        geo: new DodecahedronGeometry(1, 0),
+        m: mat(K.x + Math.cos(a) * ring, y0 + y + (rnd(n, 3) - 0.5) * 0.06, K.z + Math.sin(a) * ring, rnd(n, 4) * 0.6 - 0.3, rnd(n, 5) * 6.28, rnd(n, 6) * 0.6 - 0.3, s * 1.25, s * 0.58, s),
+        color: stone[n % stone.length],
+      });
+    }
+  }
+  const top = y0 + K.pole;
+  parts.push({ geo: new CylinderGeometry(0.013, 0.02, K.pole - 0.7, 5, 1, true), m: mat(K.x, y0 + 0.7 + (K.pole - 0.7) / 2, K.z), color: new Color(1.1, 0.82, 0.55) });
+  // (over-bright on purpose: the material multiplies them by its grey rock tone on upright faces)
+  const cloth: [number, number, number][] = [
+    [0.1, 0.38, 1.9],
+    [1.9, 1.9, 1.9],
+    [1.9, 0.12, 0.09],
+    [0.1, 1.2, 0.26],
+    [2.0, 1.35, 0.08],
+  ];
+  K.strings.forEach(([dx, dz, len], si) => {
+    const flags = Math.floor((len - 0.5) / 0.21);
+    const ex = K.x + dx * len;
+    const ez = K.z + dz * len;
+    const ey = terrainHeight(ex, ez) + 0.42;
+    const yaw = Math.atan2(-dz, dx);
+    // a stake where the string comes down
+    parts.push({ geo: new CylinderGeometry(0.012, 0.016, 0.5, 4, 1, true), m: mat(ex, ey - 0.2, ez, 0, 0, 0), color: new Color(1.1, 0.82, 0.55) });
+    for (let f = 0; f < flags; f++) {
+      const t = (f + 0.9) / (flags + 0.8);
+      const sag = 0.42 * 4 * t * (1 - t);
+      const x = K.x + dx * len * t;
+      const z = K.z + dz * len * t;
+      const y = top + (ey - top) * t - sag * (len / 3.4);
+      const flutter = (rnd(si * 31 + f, 7) - 0.5) * 0.5;
+      const [r, g, b] = cloth[(f + si * 2) % cloth.length];
+      for (const back of [0, Math.PI]) {
+        parts.push({
+          geo: new PlaneGeometry(0.17, 0.2),
+          m: mat(x, y - 0.1, z, flutter * 0.5, yaw + back + flutter * 0.35, 0),
+          color: new Color(r, g, b),
+        });
+      }
+    }
+  });
+  const geo = mergeParts(parts);
+  parts.forEach((p) => p.geo.dispose());
+  const m = new Mesh(geo, mountainGroundMaterial);
+  m.name = 'EverestCairn';
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
 }
 
 /** Concatenate tile geometries (same attributes: position, normal, color, uv, index). */
@@ -625,6 +893,49 @@ export function createTerrain(): Group {
   trail.receiveShadow = true;
   g.add(trail);
   for (const r of mountainRibbons()) g.add(r);
+  // Everest (world/everest.ts): the same scheme as the east mountain. Roots the trail crosses keep their fine tiles (merged per 48 m quadrant,
+  // `Everest_ri_rj_q`) and get a coarse stand-in in 'terrain-far'; every other root, and the apron that carries the peak's north-east foot down to the
+  // east mountain's tiles (x 35..227, z 35..62), is merged into three meshes (`Everest_far_n|w|e`). Collision uses all of it.
+  const E = EVEREST_LOD;
+  const evBig: Mesh[] = [];
+  const evRoots = new Map<string, Mesh[]>();
+  everestTiles(EV, E.x0, E.x0 + E.nx * E.size, E.z0, E.z0 + E.nz * E.size).forEach((t, n) => {
+    const m = buildTile(t.x0, t.z0, t.x1, t.z1, `EverestTile_${n}`, t.cell, mountainGroundMaterial);
+    if (t.x1 - t.x0 >= E.size) evBig.push(m);
+    else {
+      const ri = Math.floor((t.x0 - E.x0) / E.size);
+      const rj = Math.floor((t.z0 - E.z0) / E.size);
+      const qk = `${ri},${rj},${Math.floor((t.x0 - E.x0 - ri * E.size) / 48)},${Math.floor((t.z0 - E.z0 - rj * E.size) / 48)}`;
+      (evRoots.get(qk) ?? evRoots.set(qk, []).get(qk)!).push(m);
+    }
+  });
+  for (let x0 = xe; x0 < xe + 2 * 96; x0 += 96) evBig.push(buildTile(x0, TERRAIN.z1, x0 + 96, TERRAIN.zSouth, 'EverestApron', 9, mountainGroundMaterial));
+  for (const [key, list] of evRoots) {
+    const [ri, rj, qi, qj] = key.split(',').map(Number);
+    const merged = new Mesh(mergeTileGeometries(list.map((m) => m.geometry)), mountainGroundMaterial);
+    merged.name = `Everest_${ri}_${rj}_${qi * 2 + qj}`;
+    merged.receiveShadow = true;
+    g.add(merged);
+    list.forEach((m) => m.geometry.dispose());
+  }
+  // Three pieces, so that the bulk of the peak is frustum culled when the player in the jungle looks away from it (one mesh's bounding sphere would
+  // hold the whole jungle and be submitted in every view): the north foot (z < 254, next to the jungle) and the west and east halves of the rest.
+  const evParts: Record<string, Mesh[]> = { n: [], w: [], e: [] };
+  for (const m of evBig) {
+    m.geometry.computeBoundingBox();
+    const bb = m.geometry.boundingBox!;
+    evParts[(bb.min.z + bb.max.z) / 2 < E.z0 + 2 * E.size ? 'n' : (bb.min.x + bb.max.x) / 2 < EVEREST.x ? 'w' : 'e'].push(m);
+  }
+  for (const [k, list] of Object.entries(evParts)) {
+    if (!list.length) continue;
+    const evFar = new Mesh(mergeTileGeometries(list.map((m) => m.geometry)), mountainGroundMaterial);
+    evFar.name = `Everest_far_${k}`;
+    evFar.receiveShadow = true;
+    g.add(evFar);
+  }
+  evBig.forEach((m) => m.geometry.dispose());
+  for (const r of everestRibbons()) g.add(r);
+  g.add(everestCairn());
   return g;
 }
 
@@ -650,6 +961,31 @@ export function createTerrainFar(): Group {
     const m = buildTile(x0, z0, x0 + 96, Math.min(TERRAIN.z1, z0 + 96), `MtnCoarse_${ri}_${rj}`, 6, mountainGroundMaterial);
     m.visible = false; // shown by ChunkLodSystem
     g.add(m);
+  }
+  // Everest: one 16 m-cell mesh per root that has fine tiles
+  const E = EVEREST_LOD;
+  const evCoarse: Mesh[] = [];
+  for (const t of everestTiles(EV, E.x0, E.x0 + E.nx * E.size, E.z0, E.z0 + E.nz * E.size)) {
+    if (t.x1 - t.x0 >= E.size) continue;
+    const ri = Math.floor((t.x0 - E.x0) / E.size);
+    const rj = Math.floor((t.z0 - E.z0) / E.size);
+    const key = `e${ri},${rj}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const x0 = E.x0 + ri * E.size;
+    const z0 = E.z0 + rj * E.size;
+    const m = buildTile(x0, z0, x0 + E.size, z0 + E.size, `EverestCoarse_${ri}_${rj}`, 16, mountainGroundMaterial);
+    m.visible = false; // shown by ChunkLodSystem
+    g.add(m);
+    evCoarse.push(m);
+  }
+  // ... and all of them again as ONE mesh: what is drawn while the player is nowhere near the peak (one draw instead of one per root)
+  if (evCoarse.length) {
+    const all = new Mesh(mergeTileGeometries(evCoarse.map((m) => m.geometry)), mountainGroundMaterial);
+    all.name = 'EverestCoarse_all';
+    all.receiveShadow = true;
+    all.visible = false; // shown by ChunkLodSystem
+    g.add(all);
   }
   return g;
 }

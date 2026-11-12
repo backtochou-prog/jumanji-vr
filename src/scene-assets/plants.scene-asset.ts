@@ -15,7 +15,7 @@
 import { BufferGeometry, CircleGeometry, Color, CylinderGeometry, Float32BufferAttribute, Mesh, Uint8BufferAttribute, Vector3 } from '@iwsdk/core';
 import { makeRandom } from '../world/layout.js';
 import { MEADOW, PAL } from '../world/palette.js';
-import { cardGeometry, lerpColor, mat, mergeBaked, mergeParts, softNormals, solidUV, tubeAlong } from './lib/geo.js';
+import { cardGeometry, lerpColor, mat, mergeBaked, mergeParts, softNormals, solidUV, tubeAlong, woodUV } from './lib/geo.js';
 import type { Part } from './lib/geo.js';
 import { tileUV } from './lib/leaf-atlas.js';
 import { foliageCardMaterial } from './lib/materials.js';
@@ -65,7 +65,7 @@ export function createTreeFern(variant: number): Mesh {
   const parts: Part[] = [];
   const h = 2.0 + variant * 0.7;
   const trunk = tubeAlong([new Vector3(0, -0.1, 0), new Vector3(0.05, h * 0.5, 0.02), new Vector3(0.08, h, 0)], (t) => 0.13 - 0.04 * t, 5, 6);
-  parts.push({ geo: solidUV(trunk), color: (p) => lerpColor('#4a3a28', '#6b5236', 0.5 + 0.5 * Math.sin(p.y * 22)) });
+  parts.push({ geo: woodUV(trunk), color: (p) => lerpColor('#4a3a28', '#6b5236', 0.5 + 0.5 * Math.sin(p.y * 22)) });
   const crown = new Vector3(0.08, h, 0);
   const lo = new Color(PAL.leafShade).lerp(new Color(PAL.leafMid), 0.4);
   const hi = new Color(PAL.leafLight);
@@ -85,7 +85,7 @@ export function createTreeFern(variant: number): Mesh {
 function ringedTrunk(rng: () => number, height: number, lean: number, radius: number): { geo: ReturnType<typeof tubeAlong>; top: Vector3 } {
   const top = new Vector3(lean, height, (rng() - 0.5) * 0.5);
   const pts = [new Vector3(0, -0.2, 0), new Vector3(lean * 0.12, height * 0.35, 0), new Vector3(lean * 0.5, height * 0.7, top.z * 0.5), top];
-  return { geo: solidUV(tubeAlong(pts, (t) => radius * (1.15 - 0.35 * t) + 0.01 * Math.sin(t * 60), 6, 9)), top };
+  return { geo: woodUV(tubeAlong(pts, (t) => radius * (1.15 - 0.35 * t) + 0.01 * Math.sin(t * 60), 6, 9)), top };
 }
 const ringColor = (p: Vector3) => lerpColor('#4f4636', '#7d6f56', 0.5 + 0.5 * Math.sin(p.y * 16)).multiplyScalar(0.6 + 0.4 * Math.min(1, Math.max(0, (p.y + 0.2) / 1.2)));
 
@@ -105,7 +105,7 @@ export function createPalm(variant: number): Mesh {
       const top = new Vector3(0.03, 1.15 + 0.5 * rng(), 0);
       const foot = new Vector3(Math.cos(a) * reach, -0.12, Math.sin(a) * reach);
       const knee = top.clone().lerp(foot, 0.45).add(new Vector3(Math.cos(a) * 0.08, 0.1, Math.sin(a) * 0.08));
-      parts.push({ geo: solidUV(tubeAlong([top, knee, foot], () => 0.028, 4, 2)), color: (p) => lerpColor('#3d3024', '#6a5a44', Math.min(1, Math.max(0, p.y / 1.4))) });
+      parts.push({ geo: woodUV(tubeAlong([top, knee, foot], () => 0.028, 4, 2)), color: (p) => lerpColor('#3d3024', '#6a5a44', Math.min(1, Math.max(0, p.y / 1.4))) });
     }
     for (let i = 0; i < 15; i++) {
       const L = 3.4 + rng() * 0.9;
@@ -136,7 +136,7 @@ export function createPalm(variant: number): Mesh {
   } else {
     // Stemless understory palm (ubim / Geonoma-type): no trunk to speak of, stiff fronds in a tight crown.
     const crown = new Vector3(0, 0.35, 0);
-    parts.push({ geo: solidUV(tubeAlong([new Vector3(0, -0.1, 0), new Vector3(0, 0.35, 0)], () => 0.14, 6, 2)), color: () => new Color('#4b3b2a') });
+    parts.push({ geo: woodUV(tubeAlong([new Vector3(0, -0.1, 0), new Vector3(0, 0.35, 0)], () => 0.14, 6, 2)), color: () => new Color('#4b3b2a') });
     for (let i = 0; i < 22; i++) {
       const L = 1.4 + rng() * 0.5;
       const tilt = 0.2 + 1.0 * (i / 22) + (rng() - 0.5) * 0.12;

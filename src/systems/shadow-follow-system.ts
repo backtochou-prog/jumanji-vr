@@ -1,4 +1,5 @@
 import { createSystem, DirectionalLightComponent, Vector3 } from '@iwsdk/core';
+import type { DirectionalLight, Object3D } from '@iwsdk/core';
 import { SUN_DIR } from '../world/palette.js';
 
 /** Snap step in LIGHT space (m). The shadow map is 1024 px over 8-16 m, so 0.5 m is a whole number (32-64) of texels. */
@@ -25,6 +26,8 @@ export class ShadowFollowSystem extends createSystem({
   private readonly right = new Vector3();
   private readonly up = new Vector3();
   private readonly target = new Vector3();
+  private readonly before = new Vector3();
+  private readonly after = new Vector3();
   private readonly offset = new Vector3(-SUN_DIR[0], -SUN_DIR[1], -SUN_DIR[2]).multiplyScalar(40);
 
   init(): void {
@@ -45,7 +48,22 @@ export class ShadowFollowSystem extends createSystem({
     this.target.set(0, 0, 0).addScaledVector(this.right, a * SNAP).addScaledVector(this.up, b * SNAP).addScaledVector(this.dir, c);
     for (const e of this.queries.suns.entities) {
       const o = e.object3D;
-      if (o) o.position.set(this.target.x + this.offset.x, this.target.y + this.offset.y, this.target.z + this.offset.z);
+      if (!o) continue;
+      o.getWorldPosition(this.before);
+      o.position.set(this.target.x + this.offset.x, this.target.y + this.offset.y, this.target.z + this.offset.z);
+      o.updateWorldMatrix(true, true);
+      o.getWorldPosition(this.after);
+      this.after.sub(this.before);
+      // Move the light's aim point by the same step, NOW. The SDK's light system places the aim point 1 m in front of the light once per frame,
+      // before this system runs; without this the light had already moved (up to several metres on a teleport, 0.5 m on every snap while walking)
+      // while its aim point was still at the old place, so for one frame the sun shone from a direction up to 30 degrees (walking) or completely
+      // (teleport) wrong: the whole world and the shadow flashed.
+      for (const child of o.children as Object3D[]) {
+        const light = child as DirectionalLight;
+        if (!light.isDirectionalLight) continue;
+        light.target.position.add(this.after);
+        light.target.updateMatrixWorld(true);
+      }
     }
   }
 }

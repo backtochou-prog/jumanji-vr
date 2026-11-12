@@ -33,7 +33,7 @@ export const wctx = {
   speed: 0,
   /** Player is standing essentially still. */
   still: true,
-  /** 0 = jungle floor .. 1 = open mountain (AtmosphereSystem). */
+  /** 0 = jungle floor .. 1 = open mountain: the east mountain's height or Everest's slopes (AtmosphereSystem's `open` / `peak`). */
   open: 0,
   /** 'low' quality tier. */
   low: false,

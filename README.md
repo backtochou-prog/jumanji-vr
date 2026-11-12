@@ -73,6 +73,7 @@ angle (30/45/60 deg or smooth), walking speed, vignette, and **quality** (high /
 | Option | Effect |
 | --- | --- |
 | `?area=entrance` / `trail` / `clearing` / `altar` or `?start=x,z` | Start in that place (test an area without walking 70 m) |
+| *(no parameter)* | Start on the summit of Everest (221 m); a 609 m trail leads down to the knoll. `?area=everest-ridge` / `everest-snow` / `everest-clouds` / `everest-rock` / `everest-foot` start part-way down; `?speed=3` walks faster |
 | `?area=climb` / `ridge` / `summit` / `summit-down` / `summit-fall` / `descent` / `ledge` / `cleft` / `bridge-west` / `bridge-mid` / `bridge-cascade` / `brink` | Start at a mountain station, at its heading and head pitch (desktop) |
 | `?move=hand` / `?reduced=1` / `?seated=1` | Comfort: thumbstick follows the left controller; no bridge sway/ground tremor (vignette >= 50 %); raise the view 0.4 m for seated play |
 | `?quality=low` | No real-time shadows, no light shafts/mist, tighter vegetation distances |

@@ -94,6 +94,22 @@
     "fov": 78
    },
    {
+    "id": "v-everest",
+    "role": "diagnostic",
+    "projection": "perspective",
+    "position": [
+     -1.2,
+     223.106,
+     366.00637601264634
+    ],
+    "target": [
+     -1.2,
+     60,
+     31
+    ],
+    "fov": 78
+   },
+   {
     "id": "v-vista",
     "role": "diagnostic",
     "projection": "perspective",

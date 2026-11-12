@@ -16,6 +16,7 @@ import { LivingWorldSystem } from './systems/living-world-system.js';
 import { applyQuality, applyTier, loadTier, warmShaders } from './settings/quality.js';
 import { AtmosphereSystem } from './systems/atmosphere-system.js';
 import { SkySystem } from './systems/sky-system.js';
+import { EverestSystem } from './systems/everest-system.js';
 import { BridgeSystem } from './systems/bridge-system.js';
 import { CollapseSystem } from './systems/collapse-system.js';
 import { ComfortSystem } from './systems/comfort-system.js';
@@ -37,6 +38,7 @@ World.create(document.getElementById('scene-container') as HTMLDivElement, proje
   world.registerSystem(StartPointSystem);
   world.registerSystem(AtmosphereSystem);
   world.registerSystem(SkySystem);
+  world.registerSystem(EverestSystem);
   world.registerSystem(ChunkLodSystem);
   world.registerSystem(WildlifeSystem);
   world.registerSystem(LivingWorldSystem);

@@ -1,5 +1,120 @@
 # Development progress
 
+## Snow from the user's snow sheet (2026-11-12, uncommitted until "push")
+
+**Not tested on a Quest 2 or a phone. Checked with typecheck, the node tools and headless desktop stills (software GL) only.**
+
+The user supplied a sheet of nine snow photos ("Use this for the snow"). Until now the Everest snow was procedural (two colours and sine ripples).
+
+- **Three tiles cut from the sheet** by `tools/photo-textures.py`, which now takes the snow sheet as a 7th argument
+  (`<terrain> <wood> <mountains> <clouds> <out.ts> <preview_dir> <snow>`): `snowWind` (02 Wind-swept, crop 259,150-509,400), `snowGrain`
+  (07 Granular frost, crop 2,1070-252,1320), `snowPack` (04 Packed snow, crop 2,500-252,750). Same pipeline as the other tiles (256 px, seamless,
+  mean ~0.8, 64 colours); `photo-textures-data.ts` grew from 1.14 MB to 1.40 MB, the nine older tiles and the cloud atlas are byte-identical
+  (checked by regenerating without the snow tiles first: same md5).
+- **`mountainGroundMaterial` reads them inside its snow branch** (`materials.ts`, cache key `mountain-ground-v12`; no new material, still 16/16):
+  wind-swept drifts at 7 m a tile, hex-tiled WITHOUT rotation (`HEX_DIR_GLSL`: per-hexagon offset only, so the drifts all lean with one wind), a
+  blurred 41 m lookup of the same photo for tone on far slopes, granular frost at 1.1 m a tile under the feet (fades out between 12 and 40 m), and
+  packed snow at 1.7 m a tile on the trail (`aPacked`). The photos choose between the lit colour and the blue shade of a hollow; the sine ripples
+  and the sine drift are gone.
+- **Two things learned on the way** (three render rounds): the deep shadows of the drift photo read as blue stains when used at full depth, so the
+  dark side is compressed; and the lit colour has to stay well under 1 (0.58, 0.70, 0.85), because the sun is warm and brighter than 1 and a
+  brighter snow clips to a flat cream in which no photo is visible.
+- **Not changed:** the far Himalaya peaks of the Everest sky (vertex colours, no texture), the terrain's snow vertex colour, the snow line. The other
+  six photos of the sheet (fresh powder, crusted ice, tracks, slush, sparkling, chunky) are not used.
+
+**Verification.** typecheck, `validate` (0 errors), `lod`, `wildlife` (41/41), `living`, `build`: pass. `stats:check`: every count budget passes with
+unchanged numbers; the build-time check failed again (4,201 ms against 2,600 ms, load average 3.7: the same timing noise as in the section below,
+still not confirmed on a quiet machine). Stills `ev-start, ev-down, ev-n, everest-snow, everest-snow-back, everest-ridge` (round `s4`): snow renders
+with no shader error, drift shading is continuous, the trail reads as packed snow.
+**Known gap in the tooling:** `asset-stats` counts only textures in material slots (`map`, `bumpMap`, ...), so the three snow tiles (like the cliff
+and bark tiles before them) are missing from its "5 MB of 8 MB" figure; they add about 0.35 MB each (256 px RGBA with mips), roughly 1 MB together.
+**Cost not measured on a headset:** a snow pixel now makes 5 more texture lookups (6 on the trail) than before.
+
+## Repeating floor texture + trunks without bark (2026-11-12, uncommitted until "push")
+
+**Not tested on a Quest 2 or a phone. Checked with typecheck, the node tools and headless desktop stills (software GL) only.**
+
+Reported from the phone: "the texture in the floor is a repeated pattern, not natural" and "some trees have texture, some lack it". Note that the
+phone runs the deployed commit `fb98ffd`, which has no trunk bark at all and none of the work below or of the two sections under this one.
+
+- **Floor, rock and standing stones no longer repeat** (`HEX_GLSL` in `src/scene-assets/lib/materials.ts`). The 256 px photo tiles were laid in a
+  plain grid, so the two dead leaves and the twig of the moss tile came back every 2 m in straight rows. The tile is now laid in hexagons one tile
+  across, each with its own random offset and rotation, the three nearest blended with sharp weights (stochastic hex tiling, Mikkelsen 2022). Used by
+  `groundMaterial` (jungle floor and trail), `mountainGroundMaterial` (east mountain and Everest) and `rockMaterial` (rocks, monoliths, crags,
+  pinnacles). No new texture, no new material, no geometry. Cost: the ground's detail layer is 3 lookups instead of 1 (4 in total with the tone
+  layer), rock 3 instead of 1. **Not measured on a Quest 2**: if the frame time suffers, this is the first thing to switch off in the low tier.
+- **Every trunk carries bark** (`BARK_GLSL`, one function shared by three materials). Tree trunks (`foliageCardMaterial`) had the bark photo at one
+  1.3 m scale only, which averages to a flat tone beyond ~15 m: a second, wider scale (4.6 x 9.5 m, stretched up the trunk) keeps furrows readable at
+  60 m. The valley canopy clumps (`canopyMaterial`, trunk found by its brown vertex colour) and the palms, tree ferns and stilt roots
+  (`plantFoliageMaterial`, trunk marked with `woodUV` in `lib/geo.ts` / `WOOD_UV` in `lib/leaf-atlas.ts`) had vertex colour only and now use the same
+  bark. Green stems, lily rims and other solids keep `solidUV` and are untouched.
+
+**Verification.** typecheck, `validate` (0 errors), `lod`, `wildlife` (41/41), `living`, `build`: pass. `stats:check`: every count is unchanged and
+inside its budget (606,792 triangles, 350 draws, 16 materials, worst mountain view 169,126 / 170,000), but the **wall-clock "asset build time" check
+failed in every run of this session** (3.3 to 7.7 s against 2.6 s; the untouched terrain alone measured 1.7 to 3.6 s between runs, on a host with
+other jobs running). It has to be re-run on a quiet machine before it can be called a pass. Stills (`/tmp/stills/g1..g3-*`): jungle floor, mountain
+trail, Everest rock and snow, monoliths, summit views render without errors; the leaf rows are gone. Palm and canopy-clump bark is too small in
+those stills to judge: **not visually confirmed up close**.
+
+## Larger map + start on the summit of Everest (2026-11-11, uncommitted until "push")
+
+**Not tested on a Quest 2 or a phone. Checked with node tools and headless desktop stills (software GL) only; nobody has walked the whole descent in a browser.**
+
+**What the player gets.** The game now starts on the summit of a snow peak ("Everest", `src/world/everest.ts`) south of the jungle: feet at
+221.5 m, 117 m above a cloud deck, a stone cairn with prayer flags beside the start, a sea of clouds with far Himalayan peaks around. A 609 m
+trail (216 m of descent, steepest grade 22 degrees, about 5.6 min at the 1.8 m/s walking speed) leads down through snow, rock and scree, through the
+cloud deck (white-out), over alpine meadow and into the jungle at Overlook Knoll, where the old game begins. The old start is `?area=entrance`;
+`?speed=` (0.8 to 6) shortens the walk. The map grew from 140 x 174 m of terrain to a peak with a 384 m footprint radius (terrain lattice
+960 x 768 m); the jungle, the east mountain, the bridge and the temple are unchanged.
+
+**How it was built (no rewrite).**
+- `src/world/everest.ts`: the peak's height field, the trail (`EV.samples`, one per metre), `EVEREST`, `EVEREST_CAIRN`, guard walls, tiles and views.
+  `terrainHeight` (layout.ts) blends it in south of the knoll. Start point: `start-point-system.ts`; the intro reveal follows it.
+- Terrain (`terrain.scene-asset.ts`): fine 2 m tiles only along the trail (drawn within 150 m), 16 m stand-ins, far shells; the trail is a
+  ribbon on the mountain material draped on the same 2 m lattice as the tiles (so it never floats or sinks), drawn within 130 m, in 60 m runs.
+  Snow above 128 m comes from the mountain material (`mountain-ground-v10`): cool blue-white with drift and wind-ripple shading, a packed-snow
+  tint on the trail (`aPacked`), bare rock on steep faces. **No new manifest material** (16/16).
+- Clouds: `everest-sky.scene-asset.ts` + `everest-system.ts` (a collar seen from below, a sea + far peaks seen from above; 1 draw, runtime
+  materials). Atmosphere (`atmosphere-system.ts`): channels `peak` / `high` / `white`; above the deck 1.5 km of clear air, inside it a white-out.
+- Summit cairn: 15 stones, a pole and 39 prayer flags in one mesh on the mountain material (1 draw, ~0.7k triangles, drawn within 130 m), with
+  a collider.
+- Wildlife and the living-world systems are parked on the peak (no jungle birds or gnats at 8,000 m).
+
+**The SDK height limit (important).** `@iwsdk/locomotor` 1.1.0-rc.2 hard-codes "if the player is above y = 100 m, put them back at (0, 2, 0)".
+With the stock package the player is thrown off the summit on the first physics step. The limit is not configurable, so it is raised **at load
+time**: `tools/locomotor-height-limit.mjs`, wired into `vite.config.ts` (a Rollup `transform` for the build, an esbuild `onLoad` for the dev
+pre-bundle). Nothing in `node_modules` is modified. The transform throws if the guard is missing or not unique, so an SDK update cannot
+silently bring the fall back. Checked: in dev the player stays at 221.46 m; in `dist/` both copies carry the raised limit (`index-*.js`:
+`playerPosition.y>1e5`, the worker data URL: `>100000`). (An in-place patch of the installed package was tried first and was refused by the
+session's permission rules; the transform is the better solution anyway.) The SDK also triples gravity above y = 10 m: untouched.
+
+**Three display defects found and fixed on the way.**
+1. *Mid-blue void below the horizon on the peak.* The SDK sky dome writes its colours without sRGB encoding, so "dome = fog colour" gave
+   `#7498b0` next to fogged ground at `#b3cbd8`. On Everest the dome now takes the sRGB-converted fog colour and stands upright
+   (`atmosphere-system.ts`, weighted by `max(high, white, peak)`; the jungle and the east mountain keep their look).
+2. *Jungle ridge rings standing as slabs across Everest's flank.* They sink with `peak` and are hidden above the deck (`chunk-lod-system.ts`).
+3. *Trail floating / sinking against the coarse-then-fine terrain.* The ribbon is draped on the tile lattice (see above).
+
+**Numbers (`npm run stats:check`, estimates of submitted work).** Scene 606,792 triangles (budget 625,000) / 350 draws (400). Everest views:
+23.6k to 44.0k triangles, 13 to 35 draws. Worst mountain view 169,126 / 170,000 (tight; "MTN climb"), worst jungle view 186,995 / 195,000.
+Asset build time 2,598 ms of 2,600 (this check flaps on a loaded host).
+
+**Verification, by level.**
+- Automated: `typecheck`, `validate` (section 8: start is the highest ground, trail walkable from summit to knoll with a 0.5 m capsule, guard
+  walls keep the player within 3.3 m of the centre line, no unguarded drop, 7 viewpoints reachable), `stats:check`, `lod`, `wildlife` (41),
+  `living`, `build`: all pass (run one by one).
+- Desktop, headless software-GL stills: summit (start view, four directions, down), ridge, snow, cloud level, rock, foot, the knoll looking
+  back at the peak, and regression stills of knoll, trail, pool, temple and the east summit.
+- **Not done:** Quest 2, phone, XR emulator session on the peak, a continuous walk down under the real locomotor in a browser (the walk is
+  simulated by `validate`), the look of the deck crossing in motion, frame rate anywhere.
+
+**Known limits.**
+- The far Himalayan peaks and the stones are plainly faceted; summit snow is fairly uniform at your feet; steep snow-free faces beside the
+  trail show a regular texture pattern at grazing angles.
+- Below the deck Everest's flanks sit in jungle air (about 250 m visibility), so from the foot the peak fades out quickly.
+- The cairn and the trail ribbons switch on at 130 m (140 m off): a small pop is possible when climbing back up.
+- The descent is long on purpose; if 5.6 minutes is too much, `?speed=` or a shorter trail are the levers.
+
 ## Prompt 09 — The living world: immersion and environmental reactivity
 
 **Not tested on a physical Quest 2. Nobody has listened to any of the new sounds (they are checked numerically). Motion was judged from simulations and a few software-GL stills, not from watching it.** Uncommitted until "push".
@@ -566,7 +681,7 @@ without breaking VR functionality. No wildlife, combat, puzzles or extra levels 
 ### Known issues and limitations
 - **Triangle budget at the entrance is tight** (164k of the 170k budget, estimated). Foliage overdraw is not captured by any estimate.
 - The `hi` tree class only covers trees within 14 m of the trail or the clearing (23 trees); the rest of the wall uses the cheap version (two crown cards), which is silhouette-like up close if the player leaves the trail.
-- Cutout leaves look better than the earlier faceted style but are still stylised, not photoreal; bark detail is geometry + vertex colour only (no texture on trunks).
+- Cutout leaves look better than the earlier faceted style but are still stylised, not photoreal; bark has a photo tile since 2026-11-11 (see the texture-templates section).
 - Water reads a little minty in stills; the stream is shallow and non-animated apart from the glint; no depth refraction.
 - Only the ruins, altar, pillars and relic cast shadows (a deliberate cost decision).
 - Light shafts are additive cards, not volumetrics; they do not follow the real shadows.
@@ -664,3 +779,51 @@ recoloured from orange/violet to sandstone/blue-grey.
 **Verification.** typecheck, validate, lod, living, build pass; stats budgets pass except the host-dependent "asset build time" check
 (5.8 s on a loaded machine); wildlife passed on the second run (its CPU-spike check failed once on the loaded host). Desktop software-GL
 stills only; not tested on a Quest or phone. The thick dark lines on the mountain ledge are the collapse shelf's crack marks (intended).
+
+## Glitch root causes + texture templates + photographic clouds (2026-11-11, uncommitted)
+
+**Glitching visuals: four causes found and fixed.**
+1. *Sun direction jumped while moving.* `shadow-follow-system.ts` moved the sun light with the player but its aim point one frame late, so for
+   a frame the whole scene was lit from a wrong direction (measured: up to 134.8 degrees off, 24 of 96 frames wrong on a walk). Light and aim
+   point now move together (measured 0 degrees).
+2. *Trees changed shape at 30 m.* The cheap far tree and the near tree of the same placement could be different variants, so a tree swapped
+   silhouette at the LOD hand-off. Both now use the same variant (`trees.scene-asset.ts`, `chunks.scene-asset.ts`, `tools/generate-scene.mjs`,
+   regenerated `src/world/baked.ts`).
+3. *Milky sheet with a hard straight edge on the trail.* The additive ground-mist discs were flat: the terrain cut them along straight lines,
+   and standing inside one washed 70.8 % of the screen. The mist material (`lightShaftMaterial`, key `light-shaft-v3`) has a per-vertex near
+   fade (`aNear`, 20 m for the mist) and the three round spots are draped over the terrain (`atmosphere.scene-asset.ts`).
+4. *Straight seam along the trail edge.* The trail ribbon's rim sat 7.5 cm above the ground, so the world-projected ground photo jumped by its
+   parallax there. The two rim columns are now tucked 4 cm under the terrain (normals kept from the lifted ribbon) and the ribbon is pure
+   ground colour from its second column outwards (`terrain.scene-asset.ts`, `createTrailGeometry`).
+
+**Texture templates (user's sheets).** `tools/photo-textures.py <terrain> <wood> <mountains> <clouds> <out.ts> <preview_dir>` (since 2026-11-12 also `<snow>`, see the top section; numpy +
+Pillow, run with `python3 -I`; the template images are not in the repo) regenerates `src/scene-assets/lib/photo-textures-data.ts` (1.1 MB):
+nine 256 px tiles (crop, flatten lighting, make seamless, normalise to a mean of ~0.8, 64 colours) and one 512 px cloud atlas. Crops:
+
+| tile | sheet | used by |
+| --- | --- | --- |
+| `moss` | terrain | jungle ground + trail (`jungle-ground-v7`; detail tile now 1.3 m, was 2.6 m) |
+| `rock` | terrain | boulders, stones |
+| `cliff`, `ledge` | terrain | mountain walls and walkable tops |
+| `canopy` | terrain | mountain canopy (`mountain-canopy-v4`) |
+| `water` | terrain | pool/stream, drifting (`jungle-water-v3`) |
+| `bark` | wood | trunks of the card trees, world-space (`jungle-card-v3`); this replaces "no texture on trunks" |
+| `barkMoss` | wood | `barkMaterial.map` (near trunks, logs, roots) |
+| `range` | mountains photo | jungle ridge rings, far ranges and tepuis (`silhouetteMaterial.map`) |
+
+All still MULTIPLY the baked vertex colours; no new manifest material (16/16). The jungle ridge rings were recoloured to the photo's layered
+blues (`RIDGE_RINGS[].tone`), and the summit has five far-range rings (380-800 m, +1,056 triangles).
+
+**Clouds.** The sky pack's cloud mesh is now 21 photographic cards (672 triangles: cumulus low, altocumulus and cirrus higher) with UVs into
+the cloud atlas; `sky-system.ts` gives it a second runtime material `sky-clouds` (the haze/sun mesh keeps `sky-pack`). The sky stays blue.
+The additive sun shafts were NOT brought back.
+
+**Verification.** typecheck, validate, lod, living and build pass. `stats:check`: all budgets pass (worst jungle view 184,287 tris / 97 draws,
+worst mountain view 156,910 / 85, textures est. 5 MB of 8 MB, materials 16/16) except the host-dependent "asset build time" (2.8-5.2 s here;
+the last commit measures 4.3-4.5 s on the same loaded host, so it is not caused by this work). `wildlife`: 40 of 41 pass; the failing one is the
+host-dependent worst-frame CPU spike (114 ms once in 10,668 frames; wildlife code untouched). Visual checks are headless desktop software-GL stills only (spawn, knoll, trail, pool, temple,
+ledge, summit all round): clouds, bark, ground scale, ridge colours, mist fade and the trail edge were looked at there. Not tested on a Quest
+or a phone; frame-rate cost of the extra texture lookups and the cloud material is unmeasured on a device.
+
+**Left as is.** Mossy boulders show a strong crack pattern from the `rock` tile; the fallen log's bark is stretched along its length; sunlit
+standing stones read saturated tan; mist banks seen edge-on from far away are a thin bright line.

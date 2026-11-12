@@ -167,7 +167,8 @@ export class WildlifeSystem extends createSystem({}) {
     this.lastZ = this.pos.z;
     this.stillFor = wctx.speed < 0.25 ? this.stillFor + dt : 0;
     wctx.still = this.stillFor > 4;
-    wctx.open = atmosphere.open;
+    // (Everest's slopes are open ground too: no gnats, butterflies, monkeys or insect hum up there, and the mountain's wind instead of the leaves)
+    wctx.open = Math.max(atmosphere.open, atmosphere.peak);
     wctx.low = qualityState.tier === 'low';
     this.audio.setLow(wctx.low);
 

@@ -1,10 +1,11 @@
 import { createSystem, LocomotionSystem, Vector3 } from '@iwsdk/core';
 import { placePlayer } from '../diagnostics/perf-test.js';
-import { ALTAR, FORD, MTN_VIEWS, SPAWN, SPAWN_YAW_DEG, terrainHeight } from '../world/layout.js';
+import { ALTAR, EVEREST_VIEWS, FORD, MTN_VIEWS, SPAWN, SPAWN_YAW_DEG, terrainHeight } from '../world/layout.js';
 
 /**
- * Jump-to-area shortcuts for testing (URL only; the normal start is the authored spawn):
- *   ?area=entrance | trail | clearing | altar     or   ?start=x,z   (+ &yaw=deg)
+ * Jump-to-area shortcuts for testing (URL only; the normal start is the authored spawn: Everest's summit):
+ *   ?area=entrance (= knoll: the old start, Overlook Knoll) | trail | clearing | altar     or   ?start=x,z   (+ &yaw=deg)
+ *   ?area=everest | everest-north | everest-ridge | everest-snow | everest-clouds | everest-rock | everest-foot   (stations down Everest's trail)
  *   (the repeatable performance poses live in TEST_POSES and are used by ?test=, see diagnostics/perf-test.ts)
  * Handy on the headset: open the page with ?area=clearing to review the ancient
  * clearing without walking the whole trail. Applied once, as soon as locomotion is ready.
@@ -20,7 +21,7 @@ export class StartPointSystem extends createSystem({}) {
     const q = new URLSearchParams(globalThis.location?.search ?? '');
     let xz: [number, number] | null = null;
     const area = q.get('area');
-    if (area === 'entrance') {
+    if (area === 'entrance' || area === 'knoll') {
       xz = [SPAWN[0], SPAWN[1]];
       if (!q.has('yaw')) this.yaw = SPAWN_YAW_DEG;
     }
@@ -30,7 +31,7 @@ export class StartPointSystem extends createSystem({}) {
     if (area === 'clearing') xz = [0, -52];
     if (area === 'altar') xz = [ALTAR[0], ALTAR[1] + 2.2];
     // Mountain stations: ?area=summit | summit-down | summit-fall | descent | ledge | cleft | bridge-west | bridge-mid | brink ...
-    const mv = area ? MTN_VIEWS[area] : undefined;
+    const mv = area ? (MTN_VIEWS[area] ?? EVEREST_VIEWS[area]) : undefined;
     if (mv) {
       xz = [mv.x, mv.z];
       this.yaw = mv.yawDeg;

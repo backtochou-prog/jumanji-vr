@@ -7,7 +7,7 @@
  * a baked vertex-colour attribute, so every asset costs exactly one draw call
  * (and, when it is a single Mesh, can be GPU-instanced by scene patterns).
  */
-import { tileUV } from './leaf-atlas.js';
+import { WOOD_UV, tileUV } from './leaf-atlas.js';
 import type { LeafTile } from './leaf-atlas.js';
 import {
   BufferAttribute,
@@ -313,6 +313,13 @@ export function solidUV(geo: BufferGeometry): BufferGeometry {
   const cu = (u0 + u1) / 2;
   const cv = (v0 + v1) / 2;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, cu + (uv.getX(i) % 1) * 0.01, cv + (uv.getY(i) % 1) * 0.01);
+  return geo;
+}
+
+/** Like `solidUV`, for real trunk wood: maps every UV to the atlas' WOOD_UV marker, where plantFoliageMaterial adds the bark photo. */
+export function woodUV(geo: BufferGeometry): BufferGeometry {
+  const uv = geo.getAttribute('uv');
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, WOOD_UV[0] + (uv.getX(i) % 1) * 0.008, WOOD_UV[1] + (uv.getY(i) % 1) * 0.008);
   return geo;
 }
 

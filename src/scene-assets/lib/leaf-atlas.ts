@@ -73,6 +73,15 @@ export function tileUV(tile: LeafTile): [number, number, number, number] {
   return [u0, v0, u1, v1];
 }
 
+/**
+ * Atlas point (inside the neutral 'bark' tile, off its centre) that marks real TRUNK wood: `woodUV` in geo.ts maps a trunk here and
+ * plantFoliageMaterial projects the bark photo on exactly those fragments. Green stems and other solids stay at the tile centre (`solidUV`).
+ */
+export const WOOD_UV: readonly [number, number] = (() => {
+  const [u0, v0, u1, v1] = tileUV('bark');
+  return [(u0 + u1) / 2 + 0.045, (v0 + v1) / 2 + 0.045] as const;
+})();
+
 type Pix = { r: number; g: number; b: number; a: number };
 const clamp = (x: number, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const sstep = (a: number, b: number, x: number) => {

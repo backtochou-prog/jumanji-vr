@@ -26,6 +26,9 @@ import { atmosphere } from './atmosphere-system.js';
  * Ends early (the veil fades in 1.5 s) when the player walks more than 10 m from the start or a perf test starts, or snaps if reduced motion is switched on.
  * The reveal replays once from the start when the VR session begins (the headset page is usually opened long before the player puts the headset on).
  * Sound off: the fall level and the cue are simply inaudible (the audio engine honours the setting); nothing else changes.
+ *
+ * The game now starts on Everest's summit (world/everest.ts), 600 m of trail above the knoll. Then the reveal is only ARMED: nothing is veiled up there;
+ * the valley mist gathers over the last 50 m of the walk down, and the reveal plays, exactly as above, the first time the player steps onto the knoll.
  */
 
 type Veiled = typeof atmosphere & { veil?: number };
@@ -45,12 +48,14 @@ const CROSS_AT = 10;
 const CROSS_LATEST = 14;
 const CROSS_GIVE_UP = 17;
 const WALK_AWAY = 10; // m from the start point
+const ARRIVE = 8; // m from the knoll's viewpoint: an armed reveal starts here
+const MIST_FROM = 60; // m: where the valley mist begins to gather on the way down
 const FADE_OUT_S = 1.5;
 
 /** Read-only state for tests and the diagnostics. */
 export const introState = {
-  /** 'off' = disabled for this page, 'waiting' = scene not ready / not started, 'running', 'done'. */
-  phase: 'off' as 'off' | 'waiting' | 'running' | 'done',
+  /** 'off' = disabled for this page, 'waiting' = scene not ready / not started, 'armed' = started on Everest: plays on arrival at the knoll, 'running', 'done'. */
+  phase: 'off' as 'off' | 'waiting' | 'armed' | 'running' | 'done',
   t: 0,
   liftStart: -1,
   gaze: 0,
@@ -82,6 +87,12 @@ export class IntroSystem extends createSystem({}) {
 
   init(): void {
     if (!introWanted()) return;
+    // the normal start is Everest's summit: the reveal waits for the player on the knoll (a URL that starts on the knoll, `?reveal=1&area=entrance`, plays it at once)
+    const q = new URLSearchParams(globalThis.location?.search ?? '');
+    if (!q.has('area') && !q.has('start')) {
+      introState.phase = 'armed';
+      return;
+    }
     introState.phase = 'waiting';
     // The veil is set right now (before the first frame of any system) so the very first rendered frame is already inside the mist.
     this.writeVeil(1);
@@ -132,7 +143,7 @@ export class IntroSystem extends createSystem({}) {
     // the VR session begins: play the reveal from the start once (the player has only now put the headset on). Tracked in every phase but 'off' (the
     // reveal is usually over by then: the page sits open in the 2D window first); 'waiting' starts from now anyway.
     const immersive = this.world.visibilityState.peek() === VisibilityState.Visible;
-    if (immersive && !this.wasImmersive && !this.replayed && phase !== 'waiting') {
+    if (immersive && !this.wasImmersive && !this.replayed && phase !== 'waiting' && phase !== 'armed') {
       this.player.getWorldPosition(this.player3);
       const near = Math.hypot(this.player3.x - SPAWN[0], this.player3.z - SPAWN[1]) <= WALK_AWAY;
       if (near && introWanted() && (perfTest.state === 'idle' || perfTest.state === 'done')) {
@@ -142,6 +153,26 @@ export class IntroSystem extends createSystem({}) {
     }
     this.wasImmersive = immersive;
     if (introState.phase === 'done') return;
+
+    // armed: the mist gathers as the knoll comes near; the reveal starts on arrival
+    if (phase === 'armed') {
+      const nowS = performance.now() / 1000;
+      let cancel = perfTest.state !== 'idle' && perfTest.state !== 'done';
+      if (nowS >= this.nextReduced) {
+        this.nextReduced = nowS + 1;
+        cancel ||= loadComfort().reducedMotion;
+      }
+      if (cancel) {
+        this.writeVeil(0);
+        introState.phase = 'done';
+        return;
+      }
+      this.player.getWorldPosition(this.player3);
+      const d = Math.hypot(this.player3.x - SPAWN[0], this.player3.z - SPAWN[1]);
+      if (d > ARRIVE) return this.writeVeil(1 - smoothstep(ARRIVE + 4, MIST_FROM, d));
+      this.replayed = true; // (this IS the first look at the valley, headset on or not)
+      this.restart();
+    }
 
     // an early-end fade in progress
     if (this.fading > 0) {
